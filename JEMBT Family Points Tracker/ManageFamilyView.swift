@@ -72,9 +72,15 @@ struct ManageFamilyView: View {
                             canEdit: canEdit,
                             isCurrentMember: member.id == appleIDManager.currentFamilyMember?.id,
                             onGenerateCode: { generateCode(for: member) },
-                            onEdit: { editingMember = member },
-                            onDeactivate: { memberPendingRemoval = member }
+                            onEdit: { editingMember = member }
                         )
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            if canEdit {
+                                Button("Remove", role: .destructive) {
+                                    memberPendingRemoval = member
+                                }
+                            }
+                        }
                     }
                 }
             } header: {
@@ -246,9 +252,6 @@ private struct MemberAdministrationRow: View {
     let isCurrentMember: Bool
     let onGenerateCode: () -> Void
     let onEdit: () -> Void
-    let onDeactivate: () -> Void
-    @Environment(\.openURL) private var openURL
-    @State private var showMailUnavailableAlert = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -274,11 +277,6 @@ private struct MemberAdministrationRow: View {
                 }
             }
 
-            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            if canEdit {
-                Button("Remove", role: .destructive, action: onDeactivate)
-            }
-            }
             if let email = member.emailAddress, !email.isEmpty {
                 Text(email)
                     .font(.caption)
@@ -290,32 +288,21 @@ private struct MemberAdministrationRow: View {
                     Text("Invite code: \(invitation.code)")
                         .font(.caption.monospaced().bold())
                     Spacer()
-                    if let email = member.emailAddress {
-                        Button("Send email") {
-                            sendEmail(to: email, code: invitation.code)
-                        }
-                        .font(.caption)
-                        .buttonStyle(.borderless)
+                    ShareLink(
+                        item: invitationMessage(code: invitation.code),
+                        subject: Text(invitationSubject),
+                        message: Text(invitationMessage(code: invitation.code))
+                    ) {
+                        Label("Share invitation", systemImage: "square.and.arrow.up")
+                            .font(.caption)
                     }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Share invitation for \(member.name)")
                 } else if canEdit {
                     Button("Generate invitation code", action: onGenerateCode)
                         .font(.caption)
                 }
             }
-
-            if let invitation,
-               member.emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-                ShareLink(item: invitationMessage(code: invitation.code)) {
-                    Label("Share invitation", systemImage: "square.and.arrow.up")
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-            }
-        }
-        .alert("Mail Is Unavailable", isPresented: $showMailUnavailableAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("No mail app is available to send this invitation. Copy the invitation code shown above and share it through another app.")
         }
     }
 
@@ -332,34 +319,12 @@ private struct MemberAdministrationRow: View {
         return name
     }
 
-    private func mailURL(to email: String, code: String) -> URL? {
-        let subject = "You're invited to join our allowance family"
-        let body = "You've been invited to join our family in the allowance app. Open the app, sign in, and enter this invitation code: \(code)"
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = email
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: subject),
-            URLQueryItem(name: "body", value: body)
-        ]
-        return components.url
+    private var invitationSubject: String {
+        "You're invited to join our allowance family"
     }
 
     private func invitationMessage(code: String) -> String {
         "You've been invited to join our family in the allowance app. Open the app, sign in, and enter this invitation code: \(code)"
-    }
-
-    private func sendEmail(to email: String, code: String) {
-        guard let url = mailURL(to: email, code: code) else {
-            showMailUnavailableAlert = true
-            return
-        }
-
-        openURL(url) { accepted in
-            if !accepted {
-                showMailUnavailableAlert = true
-            }
-        }
     }
 }
 
