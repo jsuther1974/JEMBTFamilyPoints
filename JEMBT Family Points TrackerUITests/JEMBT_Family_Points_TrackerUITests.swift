@@ -60,7 +60,7 @@ private extension XCUIApplication {
         XCTAssertTrue(meLabelElement.waitForExistence(timeout: 8), "Expected a member row marked as '(me)'.")
 
         let meLabel = meLabelElement.label
-        let meRow = cells.containing(.staticText, identifier: meLabel).firstMatch
+let meRow = cells.containing(NSPredicate(format: "label == %@", meLabel)).firstMatch
         XCTAssertTrue(meRow.waitForExistence(timeout: 3), "Expected to find the row for the current member.")
 
         XCTAssertFalse(meRow.buttons["Generate invitation code"].exists)
