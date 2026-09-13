@@ -283,24 +283,26 @@ private struct MemberAdministrationRow: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack {
-                if let invitation {
-                    Text("Invite code: \(invitation.code)")
-                        .font(.caption.monospaced().bold())
-                    Spacer()
-                    ShareLink(
-                        item: invitationMessage(code: invitation.code),
-                        subject: Text(invitationSubject),
-                        message: Text(invitationMessage(code: invitation.code))
-                    ) {
-                        Label("Share invitation", systemImage: "square.and.arrow.up")
+            if !isCurrentMember {
+                HStack {
+                    if let invitation {
+                        Text("Invite code: \(invitation.code)")
+                            .font(.caption.monospaced().bold())
+                        Spacer()
+                        ShareLink(
+                            item: invitationMessage(code: invitation.code),
+                            subject: Text(invitationSubject),
+                            message: Text(invitationMessage(code: invitation.code))
+                        ) {
+                            Label("Share invitation", systemImage: "square.and.arrow.up")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Share invitation for \(member.name)")
+                    } else if canEdit {
+                        Button("Generate invitation code", action: onGenerateCode)
                             .font(.caption)
                     }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Share invitation for \(member.name)")
-                } else if canEdit {
-                    Button("Generate invitation code", action: onGenerateCode)
-                        .font(.caption)
                 }
             }
         }

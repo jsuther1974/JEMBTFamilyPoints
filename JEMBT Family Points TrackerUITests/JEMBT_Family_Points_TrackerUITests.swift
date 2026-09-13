@@ -1,43 +1,74 @@
-//
-//  JEMBT_Family_Points_TrackerUITests.swift
-//  JEMBT Family Points TrackerUITests
-//
-//  Created by Jeffrey Sutherland on 9/8/26.
-//
-
 import XCTest
 
 final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
-
-        // In UI tests it is usually best to stop immediately when a failure occurs.
         continueAfterFailure = false
-
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
-    }
-
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
     }
 
     @MainActor
-    func testExample() throws {
-        // UI tests must launch the application that they test.
+    func testCurrentMemberRowDoesNotShowInviteActions() throws {
         let app = XCUIApplication()
         app.launch()
 
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // XCUIAutomation Documentation
-        // https://developer.apple.com/documentation/xcuiautomation
+        app.signInAndJoinDemoFamilyIfNeeded()
+        app.openFamilyTab()
+        app.assertCurrentMemberCannotInvite()
     }
 
     @MainActor
     func testLaunchPerformance() throws {
-        // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
             XCUIApplication().launch()
+        }
+    }
+}
+
+private extension XCUIApplication {
+    @MainActor
+    func signInAndJoinDemoFamilyIfNeeded() {
+        let simulatorButton = buttons["Use Simulator Test Account"]
+        if simulatorButton.waitForExistence(timeout: 5) {
+            simulatorButton.tap()
+        }
+
+        let joinButton = buttons["Join a family with an invitation code"]
+        if joinButton.waitForExistence(timeout: 2) {
+            joinButton.tap()
+
+            let invitationField = textFields["Invitation code"]
+            XCTAssertTrue(invitationField.waitForExistence(timeout: 5))
+            invitationField.tap()
+            invitationField.typeText("DEMO-FAMILY")
+
+            navigationBars.buttons["Join"].tap()
+        }
+    }
+
+    @MainActor
+    func openFamilyTab() {
+        let familyTab = tabBars.buttons["Family"]
+        if familyTab.waitForExistence(timeout: 5) {
+            familyTab.tap()
+        }
+    }
+
+    @MainActor
+    func assertCurrentMemberCannotInvite() {
+        let meLabelPredicate = NSPredicate(format: "label CONTAINS '(me)'")
+        let meLabelElement = staticTexts.matching(meLabelPredicate).firstMatch
+        XCTAssertTrue(meLabelElement.waitForExistence(timeout: 8), "Expected a member row marked as '(me)'.")
+
+        let meLabel = meLabelElement.label
+let meRow = cells.containing(NSPredicate(format: "label == %@", meLabel)).firstMatch
+        XCTAssertTrue(meRow.waitForExistence(timeout: 3), "Expected to find the row for the current member.")
+
+        XCTAssertFalse(meRow.buttons["Generate invitation code"].exists)
+        XCTAssertFalse(meRow.buttons["Share invitation"].exists)
+
+        let name = meLabel.components(separatedBy: " (me)").first ?? ""
+        if !name.isEmpty {
+            XCTAssertFalse(buttons["Share invitation for \(name)"].exists)
         }
     }
 }
