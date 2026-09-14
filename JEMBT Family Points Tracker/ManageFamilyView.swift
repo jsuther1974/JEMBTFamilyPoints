@@ -314,7 +314,7 @@ private struct MemberAdministrationRow: View {
             name += " (me)"
         }
         if let age = member.currentAge {
-            name += " – \(age)"
+            name += " – \(age) years old"
         } else {
             name += " – No birthdate"
         }
