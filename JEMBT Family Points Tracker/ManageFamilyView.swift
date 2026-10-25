@@ -592,8 +592,12 @@ private struct MemberEditorView: View {
            let birthday = contact.birthday,
            let year = birthday.year, year > 1, year != NSDateComponentUndefined,
            birthday.month != nil, birthday.day != nil {
-            let calendar = birthday.calendar ?? Calendar(identifier: .gregorian)
-            if let date = calendar.date(from: birthday), date <= .now {
+            var calendar = birthday.calendar ?? Calendar(identifier: .gregorian)
+            calendar.timeZone = .current
+            var components = birthday
+            components.calendar = calendar
+            components.timeZone = calendar.timeZone
+            if let date = calendar.date(from: components), date <= .now {
                 draft.birthDate = date
             }
         }
