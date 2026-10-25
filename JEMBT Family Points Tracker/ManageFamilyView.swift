@@ -18,6 +18,7 @@ struct ManageFamilyView: View {
     @State private var showingAddMember = false
     @State private var editingMember: FamilyMember?
     @State private var memberPendingRemoval: FamilyMember?
+    @State private var inviteToPresentAfterAdd: PendingInviteShare?
     @State private var pendingInviteShare: PendingInviteShare?
     @State private var errorMessage: String?
 
@@ -110,7 +111,7 @@ struct ManageFamilyView: View {
             }
         }
         .navigationTitle(displayedFamilyName)
-        .sheet(isPresented: $showingAddMember) {
+        .sheet(isPresented: $showingAddMember, onDismiss: presentPendingInvite) {
             MemberEditorView(title: "Add Family Member") { draft in
                 addMember(draft)
             }
@@ -191,7 +192,7 @@ struct ManageFamilyView: View {
                 modelContext: modelContext
             )
             if let invitation = result.invitation {
-                pendingInviteShare = PendingInviteShare(
+                inviteToPresentAfterAdd = PendingInviteShare(
                     invitation: invitation,
                     memberName: result.member.name
                 )
@@ -200,6 +201,11 @@ struct ManageFamilyView: View {
         } catch {
             errorMessage = "The family member could not be added: \(error.localizedDescription)"
         }
+    }
+
+    private func presentPendingInvite() {
+        pendingInviteShare = inviteToPresentAfterAdd
+        inviteToPresentAfterAdd = nil
     }
 
 
