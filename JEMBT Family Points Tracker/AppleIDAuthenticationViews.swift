@@ -149,7 +149,7 @@ struct SignInWithAppleView: View {
     #if DEBUG
     #if targetEnvironment(simulator)
     private func signInForSimulatorTesting() {
-        let appleID = "simulator-test-user@local"
+        let appleID = ProcessInfo.processInfo.environment["UITEST_APPLE_ID"] ?? "simulator-test-user@local"
         appleIDManager.currentAppleID = appleID
         errorMessage = nil
 

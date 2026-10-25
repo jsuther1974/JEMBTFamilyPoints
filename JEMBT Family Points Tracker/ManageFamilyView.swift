@@ -2,6 +2,11 @@ import Contacts
 import ContactsUI
 import SwiftData
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 struct ManageFamilyView: View {
     @Environment(AppleIDManager.self) private var appleIDManager
@@ -11,6 +16,7 @@ struct ManageFamilyView: View {
     @State private var showingAddMember = false
     @State private var editingMember: FamilyMember?
     @State private var memberPendingRemoval: FamilyMember?
+    @State private var pendingInviteShare: PendingInviteShare?
     @State private var errorMessage: String?
 
     private var canEdit: Bool {
@@ -112,6 +118,9 @@ struct ManageFamilyView: View {
                 update(member, with: draft)
             }
         }
+        .sheet(item: $pendingInviteShare) { invite in
+            InviteShareSheet(invite: invite)
+        }
         .confirmationDialog(
             "Remove family member?",
             isPresented: Binding(
@@ -171,7 +180,7 @@ struct ManageFamilyView: View {
             return
         }
         do {
-            try appleIDManager.addFamilyMember(
+            let result = try appleIDManager.addFamilyMember(
                 family: family,
                 name: draft.name,
                 emailAddress: draft.emailAddress,
@@ -179,12 +188,101 @@ struct ManageFamilyView: View {
                 role: draft.role,
                 modelContext: modelContext
             )
+            if let invitation = result.invitation {
+                pendingInviteShare = PendingInviteShare(
+                    invitation: invitation,
+                    memberName: result.member.name
+                )
+            }
             errorMessage = nil
         } catch {
             errorMessage = "The family member could not be added: \(error.localizedDescription)"
         }
     }
 
+
+private struct PendingInviteShare: Identifiable {
+    let id: UUID
+    let memberName: String
+    let code: String
+    let expiresAt: Date?
+
+    init(invitation: FamilyInvitation, memberName: String) {
+        self.id = invitation.id
+        self.memberName = memberName
+        self.code = invitation.code
+        self.expiresAt = invitation.expiresAt
+    }
+
+    var invitationSubject: String {
+        "Join our Family Points group"
+    }
+
+    var invitationMessage: String {
+        "You've been invited to join our family in Family Points. Open the app and enter this invitation code: \(code)"
+    }
+}
+
+private struct InviteShareSheet: View {
+    let invite: PendingInviteShare
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text("Invite Ready")
+                        .font(.headline)
+                    Text("Share this code with \(invite.memberName).")
+                        .foregroundStyle(.secondary)
+                    if let expiresAt = invite.expiresAt {
+                        Text("Expires \(expiresAt.formatted(date: .abbreviated, time: .omitted)).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Invitation code") {
+                    Text(invite.code)
+                        .font(.title3.monospaced().bold())
+                        .textSelection(.enabled)
+                }
+
+                Section {
+                    ShareLink(
+                        item: invite.invitationMessage,
+                        subject: Text(invite.invitationSubject),
+                        message: Text(invite.invitationMessage)
+                    ) {
+                        Label("Share Invite", systemImage: "square.and.arrow.up")
+                    }
+
+                    Button {
+                        copyToPasteboard(invite.code)
+                    } label: {
+                        Label("Copy Code", systemImage: "doc.on.doc")
+                    }
+                }
+            }
+            .navigationTitle("Send Invitation")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func copyToPasteboard(_ value: String) {
+        #if canImport(UIKit)
+        UIPasteboard.general.string = value
+        #elseif canImport(AppKit)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+        #endif
+    }
+}
     private func update(_ member: FamilyMember, with draft: MemberDraft) {
         do {
             try appleIDManager.updateFamilyMember(
