@@ -1,5 +1,7 @@
 import Contacts
+#if canImport(ContactsUI) && canImport(UIKit)
 import ContactsUI
+#endif
 import SwiftData
 import SwiftUI
 #if canImport(UIKit)
@@ -469,8 +471,10 @@ private struct MemberEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: MemberDraft
     @State private var validationMessage: String?
+#if canImport(ContactsUI) && canImport(UIKit)
     @State private var showingContactPicker = false
     @State private var contactImportMessage: String?
+#endif
 
     init(
         title: String,
@@ -491,6 +495,7 @@ private struct MemberEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
+#if canImport(ContactsUI) && canImport(UIKit)
                 if isAddingMember {
                     Section {
                         Button {
@@ -507,6 +512,7 @@ private struct MemberEditorView: View {
                         Text("Import a name, first email address, and full birthday when available. Review the details and choose a role before saving.")
                     }
                 }
+#endif
 
                 Section {
                     TextField("Name", text: $draft.name)
@@ -566,6 +572,7 @@ private struct MemberEditorView: View {
                 }
             }
         }
+#if canImport(ContactsUI) && canImport(UIKit)
         .sheet(isPresented: $showingContactPicker) {
             FamilyMemberContactPicker { contact in
                 importContact(contact)
@@ -574,8 +581,10 @@ private struct MemberEditorView: View {
                 showingContactPicker = false
             }
         }
+#endif
     }
 
+#if canImport(ContactsUI) && canImport(UIKit)
     private func importContact(_ contact: CNContact) {
         if contact.areKeysAvailable([CNContactFormatter.descriptorForRequiredKeys(for: .fullName)]) {
             draft.name = CNContactFormatter.string(from: contact, style: .fullName) ?? ""
@@ -606,6 +615,7 @@ private struct MemberEditorView: View {
             ? "No full birthdate was available. Enter one for a child; it is optional for adults."
             : "Contact details imported. Review them and choose the member’s role before saving."
     }
+#endif
 
     private func save() {
         draft.name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -630,6 +640,7 @@ private struct MemberEditorView: View {
     }
 }
 
+#if canImport(ContactsUI) && canImport(UIKit)
 private struct FamilyMemberContactPicker: UIViewControllerRepresentable {
     let onSelect: (CNContact) -> Void
     let onCancel: () -> Void
@@ -688,6 +699,7 @@ private struct FamilyMemberContactPicker: UIViewControllerRepresentable {
         }
     }
 }
+#endif
 
 #Preview {
     NavigationStack {
