@@ -13,6 +13,17 @@ struct SignInWithAppleView: View {
     @State private var showingJoin = false
     @State private var showingCreate = false
     @State private var errorMessage: String?
+    @FocusState private var focusedCreateFamilyField: CreateFamilyField?
+
+    private enum CreateFamilyField {
+        case familyName
+        case administratorName
+    }
+
+    private var canCreateFamily: Bool {
+        !familyName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !administratorName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 20) {
@@ -103,7 +114,14 @@ struct SignInWithAppleView: View {
         NavigationStack {
             Form {
                 TextField("Family name", text: $familyName)
-                TextField("Your name", text: $administratorName)
+                    .focused($focusedCreateFamilyField, equals: .familyName)
+                    .submitLabel(.next)
+                    .onSubmit {
+                        focusedCreateFamilyField = .administratorName
+                    }
+                TextField("Your name", text: $administratorName, onCommit: submitCreateFamily)
+                    .focused($focusedCreateFamilyField, equals: .administratorName)
+                    .submitLabel(.done)
             }
             .navigationTitle("Create a Family")
             .toolbar {
@@ -112,10 +130,7 @@ struct SignInWithAppleView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") { createFamily() }
-                        .disabled(
-                            familyName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                            administratorName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        )
+                        .disabled(!canCreateFamily)
                 }
             }
         }
@@ -195,7 +210,7 @@ struct SignInWithAppleView: View {
     }
 
     private func createFamily() {
-        guard let appleID = appleIDManager.currentAppleID else { return }
+        guard canCreateFamily, let appleID = appleIDManager.currentAppleID else { return }
         do {
             _ = try appleIDManager.createFamily(
                 named: familyName.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -204,10 +219,17 @@ struct SignInWithAppleView: View {
                 modelContext: modelContext
             )
             showingCreate = false
+            focusedCreateFamilyField = nil
             familyName = ""
             administratorName = ""
         } catch {
             errorMessage = "The family could not be created: \(error.localizedDescription)"
+        }
+    }
+
+    private func submitCreateFamily() {
+        if canCreateFamily {
+            createFamily()
         }
     }
 }

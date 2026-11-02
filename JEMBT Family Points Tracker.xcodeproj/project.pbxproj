@@ -295,6 +295,7 @@
 				INFOPLIST_FILE = "JEMBT Family Points Tracker/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "JEMBT Family Points Tracker";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSContactsUsageDescription = "Family Points uses the contact you choose to prefill a family member’s name, email address, and birthday.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -365,6 +366,7 @@
 				INFOPLIST_FILE = "JEMBT Family Points Tracker/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "JEMBT Family Points Tracker";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSContactsUsageDescription = "Family Points uses the contact you choose to prefill a family member’s name, email address, and birthday.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;

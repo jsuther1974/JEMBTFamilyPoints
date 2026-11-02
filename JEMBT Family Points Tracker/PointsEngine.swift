@@ -20,12 +20,20 @@ enum PointsEngine {
         at weekEnding: Date,
         calendar: Calendar = .current
     ) -> Int {
-        guard let birthDate = member.birthDate else { return 0 }
+        age(from: member.birthDate, at: weekEnding, calendar: calendar) ?? 0
+    }
+
+    static func age(
+        from birthDate: Date?,
+        at date: Date,
+        calendar: Calendar = .current
+    ) -> Int? {
+        guard let birthDate else { return nil }
         return calendar.dateComponents(
             [.year],
             from: calendar.startOfDay(for: birthDate),
-            to: calendar.startOfDay(for: weekEnding)
-        ).year ?? 0
+            to: calendar.startOfDay(for: date)
+        ).year
     }
 
     static func startingPoints(
@@ -33,8 +41,25 @@ enum PointsEngine {
         weekEnding: Date,
         calendar: Calendar = .current
     ) -> Int {
-        guard member.role == .child else { return 0 }
-        return max(0, age(of: member, at: weekEnding, calendar: calendar) * 100)
+        startingPoints(
+            forBirthDate: member.birthDate,
+            role: member.role,
+            weekEnding: weekEnding,
+            calendar: calendar
+        )
+    }
+
+    static func startingPoints(
+        forBirthDate birthDate: Date?,
+        role: MemberRole,
+        weekEnding: Date,
+        calendar: Calendar = .current
+    ) -> Int {
+        guard role == .child,
+              let age = age(from: birthDate, at: weekEnding, calendar: calendar) else {
+            return 0
+        }
+        return max(0, age * 100)
     }
 
     static func approvedPoints(

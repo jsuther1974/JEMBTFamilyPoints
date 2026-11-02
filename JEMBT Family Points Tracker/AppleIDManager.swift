@@ -86,6 +86,7 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
             role: .familyAdmin
         )
         modelContext.insert(membership)
+        try SeedData.installDefaultRules(for: family, in: modelContext)
         try modelContext.save()
         establishSession(
             appleID: appleID,
@@ -127,16 +128,26 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
         name: String,
         emailAddress: String?,
         birthDate: Date?,
+        sourceContactIdentifier: String? = nil,
         role: MemberRole,
         modelContext: ModelContext,
         shouldCreateInvitation: Bool = true
     ) throws -> (member: FamilyMember, invitation: FamilyInvitation?) {
         try validateBirthDate(birthDate, for: role)
+        try validateUniqueMember(
+            familyID: family.id,
+            name: name,
+            emailAddress: emailAddress,
+            birthDate: birthDate,
+            sourceContactIdentifier: sourceContactIdentifier,
+            modelContext: modelContext
+        )
         let member = FamilyMember(
             familyID: family.id,
             name: name,
             emailAddress: emailAddress?.nilIfBlank,
             birthDate: birthDate,
+            sourceContactIdentifier: sourceContactIdentifier?.nilIfBlank,
             role: role
         )
         modelContext.insert(member)
@@ -162,6 +173,15 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
         modelContext: ModelContext
     ) throws {
         try validateBirthDate(birthDate, for: role)
+        try validateUniqueMember(
+            familyID: member.familyID,
+            name: name,
+            emailAddress: emailAddress,
+            birthDate: birthDate,
+            sourceContactIdentifier: member.sourceContactIdentifier,
+            excluding: member.id,
+            modelContext: modelContext
+        )
         member.name = name
         member.emailAddress = emailAddress?.nilIfBlank
         member.birthDate = birthDate
@@ -172,6 +192,50 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
     private func validateBirthDate(_ birthDate: Date?, for role: MemberRole) throws {
         guard role != .child || birthDate != nil else {
             throw FamilyMemberError.childBirthdateRequired
+        }
+    }
+
+    private func validateUniqueMember(
+        familyID: UUID,
+        name: String,
+        emailAddress: String?,
+        birthDate: Date?,
+        sourceContactIdentifier: String?,
+        excluding memberID: UUID? = nil,
+        modelContext: ModelContext
+    ) throws {
+        let candidates = try modelContext.fetch(
+            FetchDescriptor<FamilyMember>(predicate: #Predicate {
+                $0.familyID == familyID && $0.isActive
+            })
+        )
+        let normalizedName = name.normalizedMemberIdentity
+        let normalizedEmail = emailAddress?.nilIfBlank?.lowercased()
+        let contactIdentifier = sourceContactIdentifier?.nilIfBlank
+
+        let duplicate = candidates.first { member in
+            guard member.id != memberID else { return false }
+            if let contactIdentifier,
+               member.sourceContactIdentifier == contactIdentifier {
+                return true
+            }
+            if let normalizedEmail,
+               member.emailAddress?.nilIfBlank?.lowercased() == normalizedEmail {
+                return true
+            }
+            guard member.name.normalizedMemberIdentity == normalizedName else { return false }
+            switch (member.birthDate, birthDate) {
+            case (nil, nil):
+                return true
+            case let (existingDate?, proposedDate?):
+                return Calendar.current.isDate(existingDate, inSameDayAs: proposedDate)
+            default:
+                return false
+            }
+        }
+
+        if let duplicate {
+            throw FamilyMemberError.duplicateMember(duplicate.name)
         }
     }
 
@@ -355,10 +419,12 @@ enum InvitationError: LocalizedError {
 
 enum FamilyMemberError: LocalizedError {
     case childBirthdateRequired
+    case duplicateMember(String)
 
     var errorDescription: String? {
         switch self {
         case .childBirthdateRequired: "A birthdate is required for a child profile."
+        case .duplicateMember(let name): "\(name) is already in this family."
         }
     }
 }
@@ -367,6 +433,12 @@ private extension String {
     var nilIfBlank: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    var normalizedMemberIdentity: String {
+        split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
 }
 

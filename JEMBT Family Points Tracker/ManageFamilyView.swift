@@ -1,4 +1,3 @@
-import Contacts
 #if canImport(ContactsUI) && canImport(UIKit)
 import ContactsUI
 #endif
@@ -15,6 +14,7 @@ struct ManageFamilyView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \FamilyMember.name) private var members: [FamilyMember]
     @Query(sort: \FamilyInvitation.createdAt, order: .reverse) private var invitations: [FamilyInvitation]
+    @State private var showingFamilyNameEditor = false
     @State private var showingAddMember = false
     @State private var editingMember: FamilyMember?
     @State private var memberPendingRemoval: FamilyMember?
@@ -34,23 +34,11 @@ struct ManageFamilyView: View {
            !visibleMembers.contains(where: { $0.id == currentMember.id }) {
             visibleMembers.append(currentMember)
         }
-        return visibleMembers.sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
+        return visibleMembers.sorted(by: FamilyMember.comesBeforeInFamilyList)
     }
 
     var body: some View {
         List {
-            if let family = appleIDManager.currentFamily {
-                Section {
-                    TextField("My Family", text: familyNameBinding(for: family))
-                        .font(.title2.weight(.semibold))
-                        .disabled(!canEdit)
-                        .accessibilityLabel("Family name")
-                        .accessibilityHint(canEdit ? "Family admins can edit this name." : "Only a family admin can edit this name.")
-                }
-            }
-
             if let errorMessage {
                 Section {
                     Text(errorMessage)
@@ -111,14 +99,29 @@ struct ManageFamilyView: View {
             }
         }
         .navigationTitle(displayedFamilyName)
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            if canEdit {
+                ToolbarItem(placement: .primaryAction) {
+                    familyNameEditButton
+                }
+            }
+        }
+        .sheet(isPresented: $showingFamilyNameEditor) {
+            if let family = appleIDManager.currentFamily {
+                FamilyNameEditorView(currentName: family.name) { newName in
+                    try saveFamilyName(newName, for: family)
+                }
+            }
+        }
         .sheet(isPresented: $showingAddMember, onDismiss: presentPendingInvite) {
             MemberEditorView(title: "Add Family Member") { draft in
-                addMember(draft)
+                try addMember(draft)
             }
         }
         .sheet(item: $editingMember) { member in
             MemberEditorView(title: "Edit Family Member", member: member) { draft in
-                update(member, with: draft)
+                try update(member, with: draft)
             }
         }
         .sheet(item: $pendingInviteShare) { invite in
@@ -154,19 +157,25 @@ struct ManageFamilyView: View {
         return name.isEmpty ? "My Family" : name
     }
 
-    private func familyNameBinding(for family: AllowanceFamily) -> Binding<String> {
-        Binding(
-            get: { family.name },
-            set: { newValue in
-                family.name = newValue
-                do {
-                    try modelContext.save()
-                    errorMessage = nil
-                } catch {
-                    errorMessage = "The family name could not be saved: \(error.localizedDescription)"
-                }
-            }
-        )
+    private var familyNameEditButton: some View {
+        Button("Edit") {
+            showingFamilyNameEditor = true
+        }
+        .accessibilityLabel("Edit family name")
+        .accessibilityHint("Opens a form for changing the family name.")
+    }
+
+    private func saveFamilyName(_ name: String, for family: AllowanceFamily) throws {
+        let previousName = family.name
+        family.name = name
+        do {
+            try modelContext.save()
+            errorMessage = nil
+        } catch {
+            family.name = previousName
+            errorMessage = "The family name could not be saved: \(error.localizedDescription)"
+            throw error
+        }
     }
 
     private func pendingInvitation(for member: FamilyMember) -> FamilyInvitation? {
@@ -177,30 +186,26 @@ struct ManageFamilyView: View {
         }
     }
 
-    private func addMember(_ draft: MemberDraft) {
+    private func addMember(_ draft: MemberDraft) throws {
         guard let family = appleIDManager.currentFamily else {
-            errorMessage = "No family is selected."
-            return
+            throw ManageFamilyError.noSelectedFamily
         }
-        do {
-            let result = try appleIDManager.addFamilyMember(
-                family: family,
-                name: draft.name,
-                emailAddress: draft.emailAddress,
-                birthDate: draft.birthDate,
-                role: draft.role,
-                modelContext: modelContext
+        let result = try appleIDManager.addFamilyMember(
+            family: family,
+            name: draft.name,
+            emailAddress: draft.emailAddress,
+            birthDate: draft.birthDate,
+            sourceContactIdentifier: draft.sourceContactIdentifier,
+            role: draft.role,
+            modelContext: modelContext
+        )
+        if let invitation = result.invitation {
+            inviteToPresentAfterAdd = PendingInviteShare(
+                invitation: invitation,
+                memberName: result.member.name
             )
-            if let invitation = result.invitation {
-                inviteToPresentAfterAdd = PendingInviteShare(
-                    invitation: invitation,
-                    memberName: result.member.name
-                )
-            }
-            errorMessage = nil
-        } catch {
-            errorMessage = "The family member could not be added: \(error.localizedDescription)"
         }
+        errorMessage = nil
     }
 
     private func presentPendingInvite() {
@@ -291,20 +296,16 @@ private struct InviteShareSheet: View {
         #endif
     }
 }
-    private func update(_ member: FamilyMember, with draft: MemberDraft) {
-        do {
-            try appleIDManager.updateFamilyMember(
-                member,
-                name: draft.name,
-                emailAddress: draft.emailAddress,
-                birthDate: draft.birthDate,
-                role: draft.role,
-                modelContext: modelContext
-            )
-            errorMessage = nil
-        } catch {
-            errorMessage = "The family member could not be updated: \(error.localizedDescription)"
-        }
+    private func update(_ member: FamilyMember, with draft: MemberDraft) throws {
+        try appleIDManager.updateFamilyMember(
+            member,
+            name: draft.name,
+            emailAddress: draft.emailAddress,
+            birthDate: draft.birthDate,
+            role: draft.role,
+            modelContext: modelContext
+        )
+        errorMessage = nil
     }
 
     private func restoreCurrentProfileIfNeeded() {
@@ -370,6 +371,11 @@ private struct MemberAdministrationRow: View {
                     Text(member.role.title)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if member.role == .child {
+                        Text("Current default: \(currentDefaultPoints.formatted()) points")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 if !member.isActive {
@@ -428,6 +434,13 @@ private struct MemberAdministrationRow: View {
         return name
     }
 
+    private var currentDefaultPoints: Int {
+        PointsEngine.startingPoints(
+            for: member,
+            weekEnding: PointsEngine.weekEnding(containing: .now)
+        )
+    }
+
     private var invitationSubject: String {
         "You're invited to join our allowance family"
     }
@@ -467,25 +480,91 @@ private struct MemberDraft {
     var name = ""
     var emailAddress = ""
     var birthDate: Date?
+    var sourceContactIdentifier: String?
     var role: MemberRole = .child
+}
+
+private struct FamilyNameEditorView: View {
+    let onSave: (String) throws -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var validationMessage: String?
+
+    init(currentName: String, onSave: @escaping (String) throws -> Void) {
+        self.onSave = onSave
+        _name = State(initialValue: currentName)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Family name") {
+                    TextField("Family name", text: $name)
+                        .textInputAutocapitalization(.words)
+                }
+
+                if let validationMessage {
+                    Section {
+                        Text(validationMessage)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Edit Family Name")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            validationMessage = "Enter a family name."
+            return
+        }
+
+        do {
+            try onSave(trimmedName)
+            dismiss()
+        } catch {
+            validationMessage = "The family name could not be saved: \(error.localizedDescription)"
+        }
+    }
 }
 
 private struct MemberEditorView: View {
     let title: String
     let isAddingMember: Bool
-    let onSave: (MemberDraft) -> Void
+    let onSave: (MemberDraft) throws -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var draft: MemberDraft
     @State private var validationMessage: String?
+    @FocusState private var focusedField: Field?
 #if canImport(ContactsUI) && canImport(UIKit)
     @State private var showingContactPicker = false
     @State private var contactImportMessage: String?
 #endif
 
+    private enum Field: Hashable {
+        case contacts
+        case name
+        case emailAddress
+        case role
+        case birthday
+        case removeBirthday
+    }
+
     init(
         title: String,
         member: FamilyMember? = nil,
-        onSave: @escaping (MemberDraft) -> Void
+        onSave: @escaping (MemberDraft) throws -> Void
     ) {
         self.title = title
         self.isAddingMember = member == nil
@@ -494,6 +573,7 @@ private struct MemberEditorView: View {
             name: member?.name ?? "",
             emailAddress: member?.emailAddress ?? "",
             birthDate: member?.birthDate,
+            sourceContactIdentifier: member?.sourceContactIdentifier,
             role: member?.role ?? .child
         ))
     }
@@ -509,6 +589,7 @@ private struct MemberEditorView: View {
                         } label: {
                             Label("Choose from Contacts", systemImage: "person.crop.circle.badge.plus")
                         }
+                        .focused($focusedField, equals: .contacts)
                         if let contactImportMessage {
                             Text(contactImportMessage)
                                 .font(.caption)
@@ -522,36 +603,58 @@ private struct MemberEditorView: View {
 
                 Section {
                     TextField("Name", text: $draft.name)
+                        .focused($focusedField, equals: .name)
+                        .submitLabel(.next)
+                        .onSubmit {
+                            focusedField = .emailAddress
+                        }
                     TextField("Email address (optional)", text: $draft.emailAddress)
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .focused($focusedField, equals: .emailAddress)
+                        .submitLabel(.next)
+                        .onSubmit {
+                            focusedField = .role
+                        }
 
                     Picker("Role", selection: $draft.role) {
                         Text("Child").tag(MemberRole.child)
                         Text("Parent").tag(MemberRole.parent)
                         Text("Caregiver").tag(MemberRole.caregiver)
                     }
+                    .focused($focusedField, equals: .role)
 
-                    if draft.role == .child || draft.birthDate != nil {
+                    if draft.birthDate != nil {
                         DatePicker(
                             draft.role == .child ? "Birthdate" : "Birthday (optional)",
                             selection: birthDateBinding,
                             displayedComponents: .date
                         )
-                        .onAppear {
-                            if draft.role == .child && draft.birthDate == nil {
-                                draft.birthDate = Calendar.current.date(byAdding: .year, value: -10, to: .now) ?? .now
-                            }
-                        }
+                        .focused($focusedField, equals: .birthday)
                         if draft.role != .child {
-                            Button("Remove birthday", role: .destructive) {
+                            Button("Clear optional birthday") {
                                 draft.birthDate = nil
                             }
+                            .focused($focusedField, equals: .removeBirthday)
                         }
                     } else {
-                        Button("Add birthday") {
-                            draft.birthDate = Calendar.current.date(byAdding: .year, value: -30, to: .now) ?? .now
+                        Button(draft.role == .child ? "Enter birthdate" : "Add birthday") {
+                            let defaultAge = draft.role == .child ? 10 : 30
+                            draft.birthDate = Calendar.current.date(byAdding: .year, value: -defaultAge, to: .now) ?? .now
+                            focusedField = .birthday
+                        }
+                        .focused($focusedField, equals: .birthday)
+                    }
+
+                    if draft.role == .child {
+                        LabeledContent("Current default points") {
+                            if draft.birthDate == nil {
+                                Text("Enter birthdate")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("\(currentDefaultPoints.formatted()) points")
+                            }
                         }
                     }
                 } header: {
@@ -592,6 +695,7 @@ private struct MemberEditorView: View {
 
 #if canImport(ContactsUI) && canImport(UIKit)
     private func importContact(_ contact: CNContact) {
+        draft.sourceContactIdentifier = contact.identifier
         if contact.areKeysAvailable([CNContactFormatter.descriptorForRequiredKeys(for: .fullName)]) {
             draft.name = CNContactFormatter.string(from: contact, style: .fullName) ?? ""
         } else {
@@ -601,25 +705,26 @@ private struct MemberEditorView: View {
             ? contact.emailAddresses.first.map { $0.value as String } ?? ""
             : ""
 
+        let birthdayComponents: DateComponents?
+        if contact.isKeyAvailable(CNContactBirthdayKey), let birthday = contact.birthday {
+            birthdayComponents = birthday
+        } else if contact.isKeyAvailable(CNContactNonGregorianBirthdayKey),
+                  let birthday = contact.nonGregorianBirthday {
+            birthdayComponents = birthday
+        } else {
+            birthdayComponents = nil
+        }
+
         // A month/day-only birthday must never become a fabricated age.
-        draft.birthDate = nil
-        if contact.isKeyAvailable(CNContactBirthdayKey),
-           let birthday = contact.birthday,
-           let year = birthday.year, year > 1, year != NSDateComponentUndefined,
-           birthday.month != nil, birthday.day != nil {
-            var calendar = birthday.calendar ?? Calendar(identifier: .gregorian)
-            calendar.timeZone = .current
-            var components = birthday
-            components.calendar = calendar
-            components.timeZone = calendar.timeZone
-            if let date = calendar.date(from: components), date <= .now {
-                draft.birthDate = date
-            }
+        draft.birthDate = birthdayComponents.flatMap { ContactBirthdayConverter.date(from: $0) }
+        if let birthDate = draft.birthDate {
+            draft.role = ContactBirthdayConverter.isAdult(birthDate) ? .caregiver : .child
         }
         validationMessage = nil
         contactImportMessage = draft.birthDate == nil
             ? "No full birthdate was available. Enter one for a child; it is optional for adults."
             : "Contact details imported. Review them and choose the member’s role before saving."
+        focusedField = .role
     }
 #endif
 
@@ -628,21 +733,43 @@ private struct MemberEditorView: View {
         draft.emailAddress = draft.emailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !draft.name.isEmpty else {
             validationMessage = "Enter a name."
+            focusedField = .name
             return
         }
         guard draft.role != .child || draft.birthDate != nil else {
             validationMessage = "Enter a birthdate for a child profile."
+            focusedField = .birthday
             return
         }
-        onSave(draft)
-        dismiss()
+        do {
+            try onSave(draft)
+            dismiss()
+        } catch {
+            validationMessage = error.localizedDescription
+        }
     }
 
     private var birthDateBinding: Binding<Date> {
         Binding(
-            get: { draft.birthDate ?? Calendar.current.date(byAdding: .year, value: -10, to: .now) ?? .now },
+            get: { draft.birthDate ?? .now },
             set: { draft.birthDate = $0 }
         )
+    }
+
+    private var currentDefaultPoints: Int {
+        PointsEngine.startingPoints(
+            forBirthDate: draft.birthDate,
+            role: draft.role,
+            weekEnding: PointsEngine.weekEnding(containing: .now)
+        )
+    }
+}
+
+private enum ManageFamilyError: LocalizedError {
+    case noSelectedFamily
+
+    var errorDescription: String? {
+        "No family is selected."
     }
 }
 
@@ -686,7 +813,11 @@ private struct FamilyMemberContactPicker: UIViewControllerRepresentable {
             let picker = CNContactPickerViewController()
             picker.delegate = self
             picker.predicateForSelectionOfContact = NSPredicate(value: true)
-            picker.displayedPropertyKeys = [CNContactEmailAddressesKey, CNContactBirthdayKey]
+            picker.displayedPropertyKeys = [
+                CNContactEmailAddressesKey,
+                CNContactBirthdayKey,
+                CNContactNonGregorianBirthdayKey
+            ]
             picker.modalPresentationStyle = .fullScreen
             present(picker, animated: true)
         }
@@ -694,8 +825,64 @@ private struct FamilyMemberContactPicker: UIViewControllerRepresentable {
         func contactPicker(_ picker: CNContactPickerViewController, didSelect contact: CNContact) {
             // Finish UIKit's presentation before removing the SwiftUI wrapper.
             picker.dismiss(animated: true) { [self] in
-                onSelect(contact)
+                loadSelectedContactDetails(for: contact)
             }
+        }
+
+        private func loadSelectedContactDetails(for pickerContact: CNContact) {
+            if pickerContact.isKeyAvailable(CNContactBirthdayKey) ||
+                pickerContact.isKeyAvailable(CNContactNonGregorianBirthdayKey) {
+                onSelect(pickerContact)
+                return
+            }
+
+            let status = CNContactStore.authorizationStatus(for: .contacts)
+            if status == .authorized || isLimited(status) {
+                refetchAndSelect(pickerContact)
+            } else if status == .notDetermined {
+                let store = CNContactStore()
+                store.requestAccess(for: .contacts) { [weak self] granted, _ in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        if granted {
+                            self.refetchAndSelect(pickerContact, store: store)
+                        } else {
+                            self.onSelect(pickerContact)
+                        }
+                    }
+                }
+            } else {
+                onSelect(pickerContact)
+            }
+        }
+
+        private func refetchAndSelect(
+            _ pickerContact: CNContact,
+            store: CNContactStore = CNContactStore()
+        ) {
+            let keysToFetch = [
+                CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
+                CNContactEmailAddressesKey as CNKeyDescriptor,
+                CNContactBirthdayKey as CNKeyDescriptor,
+                CNContactNonGregorianBirthdayKey as CNKeyDescriptor
+            ]
+
+            do {
+                let contact = try store.unifiedContact(
+                    withIdentifier: pickerContact.identifier,
+                    keysToFetch: keysToFetch
+                )
+                onSelect(contact)
+            } catch {
+                onSelect(pickerContact)
+            }
+        }
+
+        private func isLimited(_ status: CNAuthorizationStatus) -> Bool {
+            if #available(iOS 18.0, *) {
+                return status == .limited
+            }
+            return false
         }
 
         func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
@@ -706,6 +893,55 @@ private struct FamilyMemberContactPicker: UIViewControllerRepresentable {
     }
 }
 #endif
+
+enum ContactBirthdayConverter {
+    static func isAdult(
+        _ birthDate: Date,
+        on date: Date = .now,
+        calendar: Calendar = .current
+    ) -> Bool {
+        (PointsEngine.age(from: birthDate, at: date, calendar: calendar) ?? 0) >= 18
+    }
+
+    static func date(from components: DateComponents, now: Date = .now) -> Date? {
+        guard let year = components.year,
+              let month = components.month,
+              let day = components.day,
+              year > 1,
+              year != NSDateComponentUndefined,
+              month != NSDateComponentUndefined,
+              day != NSDateComponentUndefined else {
+            return nil
+        }
+
+        var calendar = components.calendar ?? Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        var normalized = DateComponents()
+        normalized.calendar = calendar
+        normalized.timeZone = calendar.timeZone
+        normalized.era = components.era
+        normalized.year = year
+        normalized.month = month
+        normalized.day = day
+        normalized.isLeapMonth = components.isLeapMonth
+        normalized.hour = 12
+
+        guard let date = calendar.date(from: normalized) else { return nil }
+
+        let resolved = calendar.dateComponents([.era, .year, .month, .day, .isLeapMonth], from: date)
+        guard resolved.year == normalized.year,
+              resolved.month == normalized.month,
+              resolved.day == normalized.day,
+              calendar.startOfDay(for: date) <= calendar.startOfDay(for: now) else {
+            return nil
+        }
+        if let era = normalized.era, resolved.era != era { return nil }
+        if let isLeapMonth = normalized.isLeapMonth, resolved.isLeapMonth != isLeapMonth { return nil }
+
+        return date
+    }
+}
 
 #Preview {
     NavigationStack {

@@ -26,6 +26,125 @@ enum RuleCategory: String, Codable, CaseIterable {
     case rewardStore
 }
 
+enum RuleCatalog: String, Codable, CaseIterable, Identifiable {
+    case incentives
+    case disincentives
+    case tradingPost
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .incentives: "Earn Points"
+        case .disincentives: "Lose Points"
+        case .tradingPost: "Rewards Shop"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .incentives: "Tasks, activities, and behaviors that earn points"
+        case .disincentives: "Behaviors and events that lose points"
+        case .tradingPost: "Prizes that can be purchased with points"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .incentives: "star.circle.fill"
+        case .disincentives: "exclamationmark.octagon.fill"
+        case .tradingPost: "storefront.fill"
+        }
+    }
+
+    var entryKind: EntryKind {
+        switch self {
+        case .incentives: .reward
+        case .disincentives: .penalty
+        case .tradingPost: .purchase
+        }
+    }
+}
+
+enum RuleFrequencyKind: String, Codable, CaseIterable, Identifiable {
+    case count
+    case time
+
+    var id: Self { self }
+    var title: String { self == .count ? "Count" : "Time" }
+}
+
+enum RuleCountSchedule: String, Codable, CaseIterable, Identifiable {
+    case once
+    case every
+
+    var id: Self { self }
+    var title: String { self == .once ? "Once" : "Every…" }
+}
+
+enum RuleTimeUnit: String, Codable, CaseIterable, Identifiable {
+    case minute
+    case hour
+    case day
+    case week
+    case month
+
+    var id: Self { self }
+
+    func label(for value: Double) -> String {
+        let plural = value == 1 ? "" : "s"
+        return "\(rawValue)\(plural)"
+    }
+}
+
+enum RuleGrowthKind: String, Codable, CaseIterable, Identifiable {
+    case fixedPoints
+    case percentage
+
+    var id: Self { self }
+    var title: String { self == .fixedPoints ? "Points" : "Percent" }
+}
+
+enum RuleMeasurementUnit: String, Codable, CaseIterable, Identifiable {
+    case occurrence
+    case day
+    case minute
+    case fifteenMinutes
+    case thirtyMinutes
+    case hour
+    case item
+    case task
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .occurrence: "Occurrence"
+        case .day: "Day"
+        case .minute: "Minute"
+        case .fifteenMinutes: "15 minutes"
+        case .thirtyMinutes: "30 minutes"
+        case .hour: "Hour"
+        case .item: "Item"
+        case .task: "Completed task"
+        }
+    }
+
+    func label(for value: Double) -> String {
+        let plural = value == 1 ? "" : "s"
+        return switch self {
+        case .occurrence: "occurrence\(plural)"
+        case .day: "day\(plural)"
+        case .minute: "minute\(plural)"
+        case .fifteenMinutes: "15-minute interval\(plural)"
+        case .thirtyMinutes: "30-minute interval\(plural)"
+        case .hour: "hour\(plural)"
+        case .item: "item\(plural)"
+        case .task: "task\(plural)"
+        }
+    }
+}
+
 @Model
 final class FamilyMember {
     var id: UUID = UUID()
@@ -33,6 +152,7 @@ final class FamilyMember {
     var name: String = ""
     var emailAddress: String?
     var birthDate: Date?
+    var sourceContactIdentifier: String?
     var roleRawValue: String = MemberRole.child.rawValue
     var isActive: Bool = true
 
@@ -47,6 +167,7 @@ final class FamilyMember {
         name: String,
         emailAddress: String? = nil,
         birthDate: Date? = nil,
+        sourceContactIdentifier: String? = nil,
         role: MemberRole,
         isActive: Bool = true
     ) {
@@ -55,6 +176,7 @@ final class FamilyMember {
         self.name = name
         self.emailAddress = emailAddress
         self.birthDate = birthDate
+        self.sourceContactIdentifier = sourceContactIdentifier
         self.roleRawValue = role.rawValue
         self.isActive = isActive
     }
@@ -63,6 +185,7 @@ final class FamilyMember {
 @Model
 final class RuleTemplate {
     var id: UUID = UUID()
+    var familyID: UUID?
     var title: String = ""
     var categoryRawValue: String = RuleCategory.household.rawValue
     var kindRawValue: String = EntryKind.adjustment.rawValue
@@ -70,6 +193,21 @@ final class RuleTemplate {
     var guidance: String = ""
     var requiresApproval: Bool = true
     var isEnabled: Bool = true
+    var iconName: String = "star.fill"
+    var measurementUnitRawValue: String = RuleMeasurementUnit.occurrence.rawValue
+    var minimumTarget: Double?
+    var maximumTarget: Double?
+    var warningUnits: Int = 0
+    var acceleratorEnabled: Bool = false
+    var acceleratorStartsAt: Int = 2
+    var acceleratorMultiplier: Double = 2
+    var frequencyKindRawValue: String = RuleFrequencyKind.count.rawValue
+    var countScheduleRawValue: String = RuleCountSchedule.every.rawValue
+    var frequencyValue: Double = 1
+    var timeUnitRawValue: String = RuleTimeUnit.day.rawValue
+    var growthEnabled: Bool = false
+    var growthKindRawValue: String = RuleGrowthKind.percentage.rawValue
+    var growthAmount: Double = 100
 
     var category: RuleCategory {
         get { RuleCategory(rawValue: categoryRawValue) ?? .household }
@@ -81,17 +219,93 @@ final class RuleTemplate {
         set { kindRawValue = newValue.rawValue }
     }
 
+    var catalog: RuleCatalog {
+        switch kind {
+        case .reward: .incentives
+        case .penalty: .disincentives
+        case .purchase: .tradingPost
+        case .adjustment: defaultPoints < 0 ? .disincentives : .incentives
+        }
+    }
+
+    var measurementUnit: RuleMeasurementUnit {
+        get { RuleMeasurementUnit(rawValue: measurementUnitRawValue) ?? .occurrence }
+        set { measurementUnitRawValue = newValue.rawValue }
+    }
+
+    var frequencyKind: RuleFrequencyKind {
+        get { RuleFrequencyKind(rawValue: frequencyKindRawValue) ?? .count }
+        set { frequencyKindRawValue = newValue.rawValue }
+    }
+
+    var countSchedule: RuleCountSchedule {
+        get { RuleCountSchedule(rawValue: countScheduleRawValue) ?? .every }
+        set { countScheduleRawValue = newValue.rawValue }
+    }
+
+    var timeUnit: RuleTimeUnit {
+        get { RuleTimeUnit(rawValue: timeUnitRawValue) ?? .day }
+        set { timeUnitRawValue = newValue.rawValue }
+    }
+
+    var growthKind: RuleGrowthKind {
+        get { RuleGrowthKind(rawValue: growthKindRawValue) ?? .percentage }
+        set { growthKindRawValue = newValue.rawValue }
+    }
+
+    var firstAwardNumber: Int {
+        max(1, Int(minimumTarget ?? 1), warningUnits + 1)
+    }
+
+    var lastAwardNumber: Int? {
+        maximumTarget.map { Int($0) }
+    }
+
+    var maximumInputQuantity: Double {
+        max(1, (maximumTarget ?? 1_000) * max(1, frequencyValue))
+    }
+
+    func awardCount(for quantity: Double) -> Int {
+        guard quantity > 0 else { return 0 }
+        if frequencyKind == .count && countSchedule == .once { return 1 }
+        return Int((quantity / max(1, frequencyValue)).rounded(.down))
+    }
+
+    func quantityDescription(_ quantity: Double) -> String {
+        if frequencyKind == .count {
+            return "\(quantity.formatted()) time\(quantity == 1 ? "" : "s")"
+        }
+        return "\(quantity.formatted()) \(timeUnit.label(for: quantity))"
+    }
+
     init(
         id: UUID = UUID(),
+        familyID: UUID? = nil,
         title: String,
         category: RuleCategory,
         kind: EntryKind,
         defaultPoints: Int,
         guidance: String = "",
         requiresApproval: Bool = true,
-        isEnabled: Bool = true
+        isEnabled: Bool = true,
+        iconName: String = "star.fill",
+        measurementUnit: RuleMeasurementUnit = .occurrence,
+        minimumTarget: Double? = nil,
+        maximumTarget: Double? = nil,
+        warningUnits: Int = 0,
+        acceleratorEnabled: Bool = false,
+        acceleratorStartsAt: Int = 2,
+        acceleratorMultiplier: Double = 2,
+        frequencyKind: RuleFrequencyKind = .count,
+        countSchedule: RuleCountSchedule = .every,
+        frequencyValue: Double = 1,
+        timeUnit: RuleTimeUnit = .day,
+        growthEnabled: Bool = false,
+        growthKind: RuleGrowthKind = .percentage,
+        growthAmount: Double = 100
     ) {
         self.id = id
+        self.familyID = familyID
         self.title = title
         self.categoryRawValue = category.rawValue
         self.kindRawValue = kind.rawValue
@@ -99,6 +313,65 @@ final class RuleTemplate {
         self.guidance = guidance
         self.requiresApproval = requiresApproval
         self.isEnabled = isEnabled
+        self.iconName = iconName
+        self.measurementUnitRawValue = measurementUnit.rawValue
+        self.minimumTarget = minimumTarget
+        self.maximumTarget = maximumTarget
+        self.warningUnits = warningUnits
+        self.acceleratorEnabled = acceleratorEnabled
+        self.acceleratorStartsAt = acceleratorStartsAt
+        self.acceleratorMultiplier = acceleratorMultiplier
+        self.frequencyKindRawValue = frequencyKind.rawValue
+        self.countScheduleRawValue = countSchedule.rawValue
+        self.frequencyValue = frequencyValue
+        self.timeUnitRawValue = timeUnit.rawValue
+        self.growthEnabled = growthEnabled
+        self.growthKindRawValue = growthKind.rawValue
+        self.growthAmount = growthAmount
+    }
+
+    func calculatedPoints(quantity: Double, riderMultiplier: Double = 1) -> Int {
+        let awardCount = awardCount(for: quantity)
+        let firstAward = firstAwardNumber
+        let lastAward = min(awardCount, Int(maximumTarget ?? Double(awardCount)))
+        guard lastAward >= firstAward else { return 0 }
+
+        var total = 0.0
+        for awardNumber in firstAward...lastAward {
+            let growthStep = awardNumber - firstAward
+            if growthEnabled {
+                switch growthKind {
+                case .fixedPoints:
+                    let direction = defaultPoints < 0 ? -1.0 : 1.0
+                    total += Double(defaultPoints) + direction * growthAmount * Double(growthStep)
+                case .percentage:
+                    total += Double(defaultPoints) * pow(1 + max(0, growthAmount) / 100, Double(growthStep))
+                }
+            } else if acceleratorEnabled {
+                let exponent = max(0, awardNumber - max(firstAward, acceleratorStartsAt) + 1)
+                total += Double(defaultPoints) * pow(max(1, acceleratorMultiplier), Double(exponent))
+            } else {
+                total += Double(defaultPoints)
+            }
+        }
+        return Int((total * max(0, riderMultiplier)).rounded())
+    }
+}
+
+@Model
+final class RuleRider {
+    var id: UUID = UUID()
+    var ruleID: UUID = UUID()
+    var title: String = ""
+    var details: String = ""
+    var multiplier: Double = 2
+
+    init(id: UUID = UUID(), ruleID: UUID, title: String, details: String = "", multiplier: Double = 2) {
+        self.id = id
+        self.ruleID = ruleID
+        self.title = title
+        self.details = details
+        self.multiplier = multiplier
     }
 }
 
@@ -117,6 +390,9 @@ final class LedgerEntry {
     var submittedBy: String = ""
     var reviewedBy: String?
     var reviewedAt: Date?
+    var quantity: Double = 1
+    var measurementUnitRawValue: String = RuleMeasurementUnit.occurrence.rawValue
+    var riderTitle: String?
 
     var kind: EntryKind {
         get { EntryKind(rawValue: kindRawValue) ?? .adjustment }
@@ -141,7 +417,10 @@ final class LedgerEntry {
         status: ApprovalStatus,
         submittedBy: String,
         reviewedBy: String? = nil,
-        reviewedAt: Date? = nil
+        reviewedAt: Date? = nil,
+        quantity: Double = 1,
+        measurementUnit: RuleMeasurementUnit = .occurrence,
+        riderTitle: String? = nil
     ) {
         self.id = id
         self.memberID = memberID
@@ -156,6 +435,9 @@ final class LedgerEntry {
         self.submittedBy = submittedBy
         self.reviewedBy = reviewedBy
         self.reviewedAt = reviewedAt
+        self.quantity = quantity
+        self.measurementUnitRawValue = measurementUnit.rawValue
+        self.riderTitle = riderTitle
     }
 }
 
@@ -248,6 +530,21 @@ extension FamilyMember {
         guard let birthDate else { return nil }
         return Calendar.current.dateComponents([.year], from: birthDate, to: .now).year
     }
+
+    var firstNameForSorting: String {
+        name.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? name
+    }
+
+    static func comesBeforeInFamilyList(_ lhs: FamilyMember, _ rhs: FamilyMember) -> Bool {
+        if lhs.role.familyListSortOrder != rhs.role.familyListSortOrder {
+            return lhs.role.familyListSortOrder < rhs.role.familyListSortOrder
+        }
+        let firstNameComparison = lhs.firstNameForSorting.localizedCaseInsensitiveCompare(rhs.firstNameForSorting)
+        if firstNameComparison != .orderedSame {
+            return firstNameComparison == .orderedAscending
+        }
+        return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
 }
 
 enum FamilyMembershipRole: String, Codable, CaseIterable {
@@ -260,6 +557,14 @@ enum FamilyMembershipRole: String, Codable, CaseIterable {
 }
 
 extension MemberRole {
+    var familyListSortOrder: Int {
+        switch self {
+        case .parent: 0
+        case .child: 1
+        case .caregiver: 2
+        }
+    }
+
     var title: String {
         switch self {
         case .child: "Child"
@@ -290,6 +595,10 @@ extension FamilyMembershipRole {
 
     var canAdministerFamily: Bool {
         self == .familyAdmin || self == .owner
+    }
+
+    var canManageRules: Bool {
+        self == .familyAdmin || self == .owner || self == .parent
     }
 }
 

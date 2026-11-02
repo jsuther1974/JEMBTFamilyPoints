@@ -14,6 +14,7 @@ struct JEMBTFamilyPointsTrackerApp: App {
                 FamilyMembership.self,
                 FamilyMember.self,
                 RuleTemplate.self,
+                RuleRider.self,
                 LedgerEntry.self,
                 WeeklySettlement.self,
                 AppleIDMapping.self

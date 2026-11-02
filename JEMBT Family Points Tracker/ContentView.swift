@@ -132,13 +132,16 @@ private struct LogActivityView: View {
 
     @State private var selectedMemberID: UUID?
     @State private var selectedRuleID: UUID?
+    @State private var quantity = 1.0
     @State private var points = 0
     @State private var notes = ""
     @State private var submittedByChild = false
     @State private var errorMessage: String?
 
     private var rules: [RuleTemplate] {
-        allRules.filter(\.isEnabled)
+        allRules.filter {
+            $0.familyID == appleIDManager.currentFamily?.id && $0.isEnabled
+        }
     }
 
     private var familyMembers: [FamilyMember] {
@@ -159,20 +162,39 @@ private struct LogActivityView: View {
                     }
                 }
 
-                Picker("Rule or reward", selection: $selectedRuleID) {
+                Picker("Point item or reward", selection: $selectedRuleID) {
                     Text("Select").tag(nil as UUID?)
                     ForEach(rules) { rule in
                         Text(rule.title).tag(rule.id as UUID?)
                     }
                 }
                 .onChange(of: selectedRuleID) {
-                    points = selectedRule?.defaultPoints ?? 0
+                    quantity = 1
+                    updateCalculatedPoints()
                 }
 
-                if let rule = selectedRule, !rule.guidance.isEmpty {
-                    Text(rule.guidance)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if let rule = selectedRule {
+                    Section(rule.frequencyKind == .count ? "How many times?" : "How much time?") {
+                        Stepper(
+                            rule.quantityDescription(quantity),
+                            value: $quantity,
+                            in: 1...rule.maximumInputQuantity,
+                            step: 1
+                        )
+                        .onChange(of: quantity) { updateCalculatedPoints() }
+
+                        if rule.awardCount(for: quantity) < rule.firstAwardNumber {
+                            Text("Point changes begin with the \(ordinal(rule.firstAwardNumber)) award.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+
+                    if !rule.guidance.isEmpty {
+                        Text(rule.guidance)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Stepper("Points: \(points)", value: $points, in: -10_000...10_000)
@@ -211,19 +233,31 @@ private struct LogActivityView: View {
             status: submittedByChild ? .pending : .approved,
             submittedBy: submittedByChild ? "Child" : "Parent",
             reviewedBy: submittedByChild ? nil : "Parent",
-            reviewedAt: submittedByChild ? nil : .now
+            reviewedAt: submittedByChild ? nil : .now,
+            quantity: quantity,
+            measurementUnit: rule.measurementUnit,
+            riderTitle: nil
         )
         modelContext.insert(entry)
 
         do {
             try modelContext.save()
             selectedRuleID = nil
+            quantity = 1
             points = 0
             notes = ""
             errorMessage = nil
         } catch {
             errorMessage = "The entry could not be saved: \(error.localizedDescription)"
         }
+    }
+
+    private func updateCalculatedPoints() {
+        guard let rule = selectedRule else {
+            points = 0
+            return
+        }
+        points = rule.calculatedPoints(quantity: quantity)
     }
 }
 
@@ -315,7 +349,13 @@ private struct SettlementView: View {
             weekEnding: selectedWeekEnding,
             members: familyMembers,
             entries: entries.filter { ids.contains($0.memberID) },
-            settlements: settlements.filter { ids.contains($0.childID) }
+            settlements: settlements.filter { ids.contains($0.childID) }
+
+
+
+
+
+
         )
     }
 
@@ -396,49 +436,9 @@ private struct SettlementView: View {
     }
 }
 
-private struct RuleCatalogView: View {
-    @Query(sort: \RuleTemplate.title) private var rules: [RuleTemplate]
 
-    var body: some View {
-        NavigationStack {
-            List {
-                ForEach(RuleCategory.allCases, id: \.self) { category in
-                    Section(category.title) {
-                        ForEach(rules.filter { $0.category == category }) { rule in
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text(rule.title)
-                                    Spacer()
-                                    Text("\(rule.defaultPoints)")
-                                        .foregroundStyle(rule.isEnabled ? .primary : .secondary)
-                                }
-                                if !rule.guidance.isEmpty {
-                                    Text(rule.guidance)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if !rule.isEnabled {
-                                    Text("Disabled until configured")
-                                        .font(.caption.bold())
-                                        .foregroundStyle(.orange)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Rule Catalog")
-        }
-    }
+private func ordinal(_ value: Int) -> String {
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .ordinal
+    return formatter.string(from: NSNumber(value: value)) ?? "#\(value)"
 }
-
-private extension RuleCategory {
-    var title: String {
-        switch self {
-        case .household: "Household"
-        case .behavior: "Behavior"
-        case .rewardStore: "Reward Store"
-        }
-    }
-}
-

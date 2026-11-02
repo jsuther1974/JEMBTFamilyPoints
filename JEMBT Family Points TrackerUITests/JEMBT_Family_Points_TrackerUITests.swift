@@ -29,6 +29,71 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
     }
 
     @MainActor
+    func testFamilyNameEditButtonOpensEditor() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-family-name-\(UUID().uuidString)@local"
+        app.launch()
+
+        app.signInAndCreateFamilyForAddingMembers()
+        app.openFamilyTab()
+
+        let editFamilyNameButton = app.buttons["Edit family name"]
+        XCTAssertTrue(editFamilyNameButton.waitForExistence(timeout: 5), "Expected the family-name edit button to exist.")
+        editFamilyNameButton.tap()
+
+        XCTAssertTrue(
+            app.navigationBars["Edit Family Name"].waitForExistence(timeout: 5),
+            "Expected tapping the family-name edit button to open the editor."
+        )
+    }
+
+    @MainActor
+    func testReturnSubmitsCreateFamilyForm() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-create-return-\(UUID().uuidString)@local"
+        app.launch()
+
+        let simulatorButton = app.buttons["Use Simulator Test Account"]
+        XCTAssertTrue(simulatorButton.waitForExistence(timeout: 5))
+        simulatorButton.tap()
+
+        let createFamilyButton = app.buttons["Create a new family"]
+        XCTAssertTrue(createFamilyButton.waitForExistence(timeout: 5))
+        createFamilyButton.tap()
+
+        let familyNameField = app.textFields["Family name"]
+        XCTAssertTrue(familyNameField.waitForExistence(timeout: 5))
+        familyNameField.tap()
+        familyNameField.typeText("Return Test Family")
+
+        let administratorNameField = app.textFields["Your name"]
+        XCTAssertTrue(administratorNameField.waitForExistence(timeout: 5))
+        administratorNameField.tap()
+        administratorNameField.typeText("Return Test Admin")
+        administratorNameField.typeText("\r")
+
+        XCTAssertTrue(
+            app.buttons["Edit family name"].waitForExistence(timeout: 5),
+            "Expected Return in the final field to create the family."
+        )
+    }
+
+    @MainActor
+    func testNewChildDoesNotShowFabricatedBirthdate() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-empty-birthday-\(UUID().uuidString)@local"
+        app.launch()
+
+        app.signInAndCreateFamilyForAddingMembers()
+        app.openFamilyTab()
+        app.buttons["Add family member"].tap()
+
+        XCTAssertTrue(app.navigationBars["Add Family Member"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Enter birthdate"].exists, "Expected an explicit action for a child without a birthdate.")
+        XCTAssertFalse(app.datePickers["Birthdate"].exists, "A missing birthdate must not display a fabricated date.")
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         measure(metrics: [XCTApplicationLaunchMetric()]) {
             XCUIApplication().launch()
@@ -122,6 +187,11 @@ private extension XCUIApplication {
         XCTAssertTrue(nameField.waitForExistence(timeout: 5), "Expected name field in add member sheet.")
         nameField.tap()
         nameField.typeText("UI Test Invite Recipient")
+
+        let enterBirthdateButton = buttons["Enter birthdate"]
+        XCTAssertTrue(enterBirthdateButton.exists, "Expected an explicit birthdate action for a child.")
+        enterBirthdateButton.tap()
+        XCTAssertFalse(enterBirthdateButton.exists, "Expected the entry action to be replaced after choosing a birthdate.")
 
         let saveButton = navigationBars["Add Family Member"].buttons["Save"]
         XCTAssertTrue(saveButton.exists, "Expected save button in add member sheet.")
