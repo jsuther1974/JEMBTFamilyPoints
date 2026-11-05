@@ -13,15 +13,15 @@ struct ContentView: View {
             LogActivityView()
                 .tabItem { Label("Record", systemImage: "plus.circle.fill") }
                 .tag("record")
+            RuleCatalogView()
+                .tabItem { Label("Rules", systemImage: "list.bullet.rectangle") }
+                .tag("rules")
             ApprovalsView()
                 .tabItem { Label("Approvals", systemImage: "checkmark.circle") }
                 .tag("approvals")
             SettlementView()
                 .tabItem { Label("Settlement", systemImage: "dollarsign.circle") }
                 .tag("settlement")
-            RuleCatalogView()
-                .tabItem { Label("Rules", systemImage: "list.bullet.rectangle") }
-                .tag("rules")
             NavigationStack {
                 ManageFamilyView()
             }

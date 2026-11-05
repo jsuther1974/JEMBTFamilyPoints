@@ -7,6 +7,20 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
     }
 
     @MainActor
+    func testSimulatorRoleAccountsAreAvailable() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let roleAccountMenu = app.buttons["Choose Simulator Role Account"]
+        XCTAssertTrue(roleAccountMenu.waitForExistence(timeout: 5))
+        roleAccountMenu.tap()
+
+        for account in ["Parent Test Account", "Caregiver Test Account", "Child Test Account"] {
+            XCTAssertTrue(app.buttons[account].waitForExistence(timeout: 2), "Expected \(account) in the simulator account menu.")
+        }
+    }
+
+    @MainActor
     func testCurrentMemberRowDoesNotShowInviteActions() throws {
         let app = XCUIApplication()
         app.launch()
@@ -91,6 +105,30 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Add Family Member"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Enter birthdate"].exists, "Expected an explicit action for a child without a birthdate.")
         XCTAssertFalse(app.datePickers["Birthdate"].exists, "A missing birthdate must not display a fabricated date.")
+    }
+
+    @MainActor
+    func testRuleCatalogsHaveSingleBackButton() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        app.signInAndJoinDemoFamilyIfNeeded()
+
+        let rulesTab = app.tabBars.buttons["Rules"]
+        XCTAssertTrue(rulesTab.waitForExistence(timeout: 5), "Expected Rules to be a direct tab.")
+        rulesTab.tap()
+
+        for title in ["Earn Points", "Lose Points", "Rewards Shop"] {
+            let catalog = app.staticTexts[title]
+            XCTAssertTrue(catalog.waitForExistence(timeout: 5))
+            catalog.tap()
+
+            let navigationBar = app.navigationBars[title]
+            XCTAssertTrue(navigationBar.waitForExistence(timeout: 5))
+            XCTAssertEqual(navigationBar.buttons.matching(identifier: "Rules").count, 1, "Expected exactly one back button on \(title).")
+            XCTAssertFalse(navigationBar.buttons["More"].exists, "\(title) must not be nested under the system More screen.")
+            navigationBar.buttons["Rules"].tap()
+        }
     }
 
     @MainActor

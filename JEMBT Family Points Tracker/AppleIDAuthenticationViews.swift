@@ -52,7 +52,17 @@ struct SignInWithAppleView: View {
                 signInForSimulatorTesting()
             }
             .buttonStyle(.bordered)
-            Text("Debug-only shortcut. This does not appear in release builds or on devices.")
+
+            Menu("Choose Simulator Role Account") {
+                ForEach(SimulatorTestAccount.allCases) { account in
+                    Button(account.title) {
+                        signInForSimulatorTesting(appleID: account.appleID)
+                    }
+                }
+            }
+            .buttonStyle(.bordered)
+
+            Text("For first use, invite each role from the Family screen, sign out, choose its test account, and redeem that invitation code. These shortcuts do not appear in release builds or on devices.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -163,8 +173,20 @@ struct SignInWithAppleView: View {
 
     #if DEBUG
     #if targetEnvironment(simulator)
-    private func signInForSimulatorTesting() {
-        let appleID = ProcessInfo.processInfo.environment["UITEST_APPLE_ID"] ?? "simulator-test-user@local"
+    private enum SimulatorTestAccount: String, CaseIterable, Identifiable {
+        case parent
+        case caregiver
+        case child
+
+        var id: Self { self }
+        var title: String { "\(rawValue.capitalized) Test Account" }
+        var appleID: String { "simulator-\(rawValue)@local" }
+    }
+
+    private func signInForSimulatorTesting(appleID explicitAppleID: String? = nil) {
+        let appleID = explicitAppleID ??
+            ProcessInfo.processInfo.environment["UITEST_APPLE_ID"] ??
+            "simulator-test-user@local"
         appleIDManager.currentAppleID = appleID
         errorMessage = nil
 
