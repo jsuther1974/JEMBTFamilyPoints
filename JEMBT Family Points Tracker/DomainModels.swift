@@ -97,6 +97,14 @@ enum RuleTimeUnit: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum RuleMinimumPeriod: String, Codable, CaseIterable, Identifiable {
+    case weekly
+    case monthly
+
+    var id: Self { self }
+    var title: String { self == .weekly ? "Weekly" : "Monthly" }
+}
+
 enum RuleGrowthKind: String, Codable, CaseIterable, Identifiable {
     case fixedPoints
     case percentage
@@ -208,6 +216,8 @@ final class RuleTemplate {
     var growthEnabled: Bool = false
     var growthKindRawValue: String = RuleGrowthKind.percentage.rawValue
     var growthAmount: Double = 100
+    var deductStartingPointsWhenMinimumMissed: Bool = false
+    var minimumPeriodRawValue: String = RuleMinimumPeriod.weekly.rawValue
 
     var category: RuleCategory {
         get { RuleCategory(rawValue: categoryRawValue) ?? .household }
@@ -251,6 +261,11 @@ final class RuleTemplate {
     var growthKind: RuleGrowthKind {
         get { RuleGrowthKind(rawValue: growthKindRawValue) ?? .percentage }
         set { growthKindRawValue = newValue.rawValue }
+    }
+
+    var minimumPeriod: RuleMinimumPeriod {
+        get { RuleMinimumPeriod(rawValue: minimumPeriodRawValue) ?? .weekly }
+        set { minimumPeriodRawValue = newValue.rawValue }
     }
 
     var firstAwardNumber: Int {
@@ -302,7 +317,9 @@ final class RuleTemplate {
         timeUnit: RuleTimeUnit = .day,
         growthEnabled: Bool = false,
         growthKind: RuleGrowthKind = .percentage,
-        growthAmount: Double = 100
+        growthAmount: Double = 100,
+        deductStartingPointsWhenMinimumMissed: Bool = false,
+        minimumPeriod: RuleMinimumPeriod = .weekly
     ) {
         self.id = id
         self.familyID = familyID
@@ -328,6 +345,8 @@ final class RuleTemplate {
         self.growthEnabled = growthEnabled
         self.growthKindRawValue = growthKind.rawValue
         self.growthAmount = growthAmount
+        self.deductStartingPointsWhenMinimumMissed = deductStartingPointsWhenMinimumMissed
+        self.minimumPeriodRawValue = minimumPeriod.rawValue
     }
 
     func calculatedPoints(quantity: Double, riderMultiplier: Double = 1) -> Int {
@@ -450,6 +469,10 @@ final class WeeklySettlement {
     var debtCarriedIn: Int = 0
     var approvedEntryPoints: Int = 0
     var parentPotShare: Int = 0
+
+    var minimumMissDeductionPoints: Int = 0
+
+    var minimumMissDeductionDetails: String = ""
     var finalPoints: Int = 0
     var cashAmount: Decimal = 0
     var debtCarriedOut: Int = 0
@@ -464,6 +487,10 @@ final class WeeklySettlement {
         debtCarriedIn: Int,
         approvedEntryPoints: Int,
         parentPotShare: Int,
+
+        minimumMissDeductionPoints: Int = 0,
+
+        minimumMissDeductionDetails: String = "",
         finalPoints: Int,
         cashAmount: Decimal,
         debtCarriedOut: Int,
@@ -477,6 +504,10 @@ final class WeeklySettlement {
         self.debtCarriedIn = debtCarriedIn
         self.approvedEntryPoints = approvedEntryPoints
         self.parentPotShare = parentPotShare
+
+        self.minimumMissDeductionPoints = minimumMissDeductionPoints
+
+        self.minimumMissDeductionDetails = minimumMissDeductionDetails
         self.finalPoints = finalPoints
         self.cashAmount = cashAmount
         self.debtCarriedOut = debtCarriedOut
@@ -485,6 +516,19 @@ final class WeeklySettlement {
     }
 }
 
+struct MinimumMissDeduction: Identifiable {
+    let ruleID: UUID
+    let title: String
+    let period: RuleMinimumPeriod
+    let completedQuantity: Double
+    let requiredQuantity: Double
+    let points: Int
+
+    var id: UUID { ruleID }
+}
+
+
+
 struct SettlementDraft: Identifiable {
     let child: FamilyMember
     let weekEnding: Date
@@ -492,11 +536,31 @@ struct SettlementDraft: Identifiable {
     let debtCarriedIn: Int
     let approvedEntryPoints: Int
     let parentPotShare: Int
+
+    let minimumMissDeductions: [MinimumMissDeduction]
     let finalPoints: Int
     let cashAmount: Decimal
     let debtCarriedOut: Int
 
     var id: UUID { child.id }
+
+    func deductionPoints(applying ruleIDs: Set<UUID>) -> Int {
+        minimumMissDeductions
+            .filter { ruleIDs.contains($0.ruleID) }
+            .reduce(0) { $0 + $1.points }
+    }
+
+    func finalPoints(applying ruleIDs: Set<UUID>) -> Int {
+        finalPoints - deductionPoints(applying: ruleIDs)
+    }
+
+    func cashAmount(applying ruleIDs: Set<UUID>) -> Decimal {
+        Decimal(max(0, finalPoints(applying: ruleIDs))) / 100
+    }
+
+    func debtCarriedOut(applying ruleIDs: Set<UUID>) -> Int {
+        min(0, finalPoints(applying: ruleIDs))
+    }
 }
 
 @Model

@@ -61,6 +61,7 @@ private struct DashboardView: View {
     @Query(sort: \FamilyMember.name) private var members: [FamilyMember]
     @Query private var entries: [LedgerEntry]
     @Query private var settlements: [WeeklySettlement]
+    @Query private var rules: [RuleTemplate]
 
     private var weekEnding: Date {
         PointsEngine.weekEnding(containing: .now)
@@ -80,12 +81,17 @@ private struct DashboardView: View {
         return settlements.filter { ids.contains($0.childID) }
     }
 
+    private var familyRules: [RuleTemplate] {
+        rules.filter { $0.familyID == appleIDManager.currentFamily?.id }
+    }
+
     private var drafts: [SettlementDraft] {
         return PointsEngine.settlementDrafts(
             weekEnding: weekEnding,
             members: familyMembers,
             entries: familyEntries,
-            settlements: familySettlements
+            settlements: familySettlements,
+            rules: familyRules
         )
     }
 
@@ -339,8 +345,15 @@ private struct SettlementView: View {
     @Query private var members: [FamilyMember]
     @Query private var entries: [LedgerEntry]
     @Query private var settlements: [WeeklySettlement]
+    @Query private var rules: [RuleTemplate]
     @State private var selectedWeekEnding = PointsEngine.weekEnding(containing: .now)
     @State private var errorMessage: String?
+    @State private var appliedMinimumDeductions: [UUID: Set<UUID>] = [:]
+    @State private var reviewedMinimumDeductions: Set<UUID> = []
+
+    private var canConfirm: Bool {
+        appleIDManager.currentMembership?.role.canManageRules == true
+    }
 
     private var drafts: [SettlementDraft] {
         let familyMembers = members.filter { $0.familyID == appleIDManager.currentFamily?.id }
@@ -349,7 +362,8 @@ private struct SettlementView: View {
             weekEnding: selectedWeekEnding,
             members: familyMembers,
             entries: entries.filter { ids.contains($0.memberID) },
-            settlements: settlements.filter { ids.contains($0.childID) }
+            settlements: settlements.filter { ids.contains($0.childID) },
+            rules: rules.filter { $0.familyID == appleIDManager.currentFamily?.id }
 
 
 
@@ -374,19 +388,50 @@ private struct SettlementView: View {
                 }
 
                 ForEach(drafts) { draft in
+                    let confirmedSettlement = confirmedSettlement(for: draft)
                     Section(draft.child.name) {
-                        LabeledContent("Starting points", value: "\(draft.startingPoints)")
-                        LabeledContent("Debt carried in", value: "\(draft.debtCarriedIn)")
-                        LabeledContent("Approved entries", value: "\(draft.approvedEntryPoints)")
-                        LabeledContent("Parent-pot share", value: "+\(draft.parentPotShare)")
-                        LabeledContent("Final points", value: "\(draft.finalPoints)")
+                        LabeledContent("Starting points", value: "\(confirmedSettlement?.startingPoints ?? draft.startingPoints)")
+                        LabeledContent("Debt carried in", value: "\(confirmedSettlement?.debtCarriedIn ?? draft.debtCarriedIn)")
+                        LabeledContent("Approved entries", value: "\(confirmedSettlement?.approvedEntryPoints ?? draft.approvedEntryPoints)")
+                        LabeledContent("Parent-pot share", value: "+\(confirmedSettlement?.parentPotShare ?? draft.parentPotShare)")
+                        if !draft.minimumMissDeductions.isEmpty, confirmedSettlement == nil {
+                            Text("Missed minimums")
+                                .font(.headline)
+                            ForEach(draft.minimumMissDeductions) { deduction in
+                                Toggle(isOn: deductionBinding(for: deduction, childID: draft.child.id)) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Deduct \(deduction.points) points — \(deduction.title)")
+                                        Text("\(deduction.period.title): \(deduction.completedQuantity.formatted()) of \(deduction.requiredQuantity.formatted()) completed")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            Toggle(
+                                "I reviewed the missed minimums and selected the deductions to apply",
+                                isOn: reviewBinding(for: draft.child.id)
+                            )
+                            .font(.subheadline)
+                        }
+                        LabeledContent(
+                            "Minimum deductions",
+                            value: "-\(confirmedSettlement?.minimumMissDeductionPoints ?? draft.deductionPoints(applying: selectedRuleIDs(for: draft)))"
+                        )
+                        LabeledContent(
+                            "Final points",
+                            value: "\(confirmedSettlement?.finalPoints ?? draft.finalPoints(applying: selectedRuleIDs(for: draft)))"
+                        )
                         LabeledContent(
                             "Cash transfer",
-                            value: draft.cashAmount.formatted(.currency(code: "USD"))
+                            value: (confirmedSettlement?.cashAmount ?? draft.cashAmount(applying: selectedRuleIDs(for: draft)))
+                                .formatted(.currency(code: "USD"))
                         )
-                        LabeledContent("Debt carried out", value: "\(draft.debtCarriedOut)")
+                        LabeledContent(
+                            "Debt carried out",
+                            value: "\(confirmedSettlement?.debtCarriedOut ?? draft.debtCarriedOut(applying: selectedRuleIDs(for: draft)))"
+                        )
 
-                        if isConfirmed(draft) {
+                        if confirmedSettlement != nil {
                             Label("Settlement confirmed", systemImage: "checkmark.seal.fill")
                                 .foregroundStyle(.green)
                         } else {
@@ -394,23 +439,76 @@ private struct SettlementView: View {
                                 confirm(draft)
                             }
                             .buttonStyle(.borderedProminent)
+                            .disabled(
+                                !canConfirm ||
+                                (!draft.minimumMissDeductions.isEmpty && !reviewedMinimumDeductions.contains(draft.child.id))
+                            )
                         }
                     }
                 }
             }
             .navigationTitle("Weekly Settlement")
+            .onChange(of: selectedWeekEnding) {
+                appliedMinimumDeductions.removeAll()
+                reviewedMinimumDeductions.removeAll()
+            }
         }
     }
 
+    private func selectedRuleIDs(for draft: SettlementDraft) -> Set<UUID> {
+        appliedMinimumDeductions[draft.child.id] ?? []
+    }
+
+    private func deductionBinding(for deduction: MinimumMissDeduction, childID: UUID) -> Binding<Bool> {
+        Binding(
+            get: { appliedMinimumDeductions[childID, default: []].contains(deduction.ruleID) },
+            set: { isApplied in
+                var selected = appliedMinimumDeductions[childID, default: []]
+                if isApplied {
+                    selected.insert(deduction.ruleID)
+                } else {
+                    selected.remove(deduction.ruleID)
+                }
+                appliedMinimumDeductions[childID] = selected
+                reviewedMinimumDeductions.remove(childID)
+            }
+        )
+    }
+
+    private func reviewBinding(for childID: UUID) -> Binding<Bool> {
+        Binding(
+            get: { reviewedMinimumDeductions.contains(childID) },
+            set: { isReviewed in
+                if isReviewed {
+                    reviewedMinimumDeductions.insert(childID)
+                } else {
+                    reviewedMinimumDeductions.remove(childID)
+                }
+            }
+        )
+    }
+
     private func isConfirmed(_ draft: SettlementDraft) -> Bool {
-        settlements.contains {
+        confirmedSettlement(for: draft) != nil
+    }
+
+    private func confirmedSettlement(for draft: SettlementDraft) -> WeeklySettlement? {
+        settlements.first {
             $0.childID == draft.child.id &&
             Calendar.current.isDate($0.weekEnding, inSameDayAs: draft.weekEnding)
         }
     }
 
     private func confirm(_ draft: SettlementDraft) {
-        guard !isConfirmed(draft) else { return }
+        guard canConfirm,
+              !isConfirmed(draft),
+              draft.minimumMissDeductions.isEmpty || reviewedMinimumDeductions.contains(draft.child.id) else {
+            return
+        }
+
+        let selectedRuleIDs = selectedRuleIDs(for: draft)
+        let selectedDeductions = draft.minimumMissDeductions.filter { selectedRuleIDs.contains($0.ruleID) }
+        let deductionPoints = draft.deductionPoints(applying: selectedRuleIDs)
 
         modelContext.insert(
             WeeklySettlement(
@@ -420,10 +518,16 @@ private struct SettlementView: View {
                 debtCarriedIn: draft.debtCarriedIn,
                 approvedEntryPoints: draft.approvedEntryPoints,
                 parentPotShare: draft.parentPotShare,
-                finalPoints: draft.finalPoints,
-                cashAmount: draft.cashAmount,
-                debtCarriedOut: draft.debtCarriedOut,
-                confirmedBy: "Parent"
+                minimumMissDeductionPoints: deductionPoints,
+                minimumMissDeductionDetails: selectedDeductions
+                    .map {
+                        "\($0.title) (\($0.period.title.lowercased()), \($0.completedQuantity.formatted()) of \($0.requiredQuantity.formatted()) completed): -\($0.points)"
+                    }
+                    .joined(separator: "; "),
+                finalPoints: draft.finalPoints(applying: selectedRuleIDs),
+                cashAmount: draft.cashAmount(applying: selectedRuleIDs),
+                debtCarriedOut: draft.debtCarriedOut(applying: selectedRuleIDs),
+                confirmedBy: appleIDManager.currentFamilyMember?.name ?? "Parent"
             )
         )
 

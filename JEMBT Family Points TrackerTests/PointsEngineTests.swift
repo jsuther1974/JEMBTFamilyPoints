@@ -125,6 +125,334 @@ final class PointsEngineTests: XCTestCase {
         )
     }
 
+    func testWeeklyMinimumMissIsProposedOnlyWhenRuleOptsIn() {
+        let familyID = UUID()
+        let child = FamilyMember(
+            familyID: familyID,
+            name: "Child",
+            birthDate: date(2018, 1, 1),
+            role: .child
+        )
+        let optedIn = minimumRule(
+            familyID: familyID,
+            title: "Homework",
+            points: 100,
+            minimum: 4,
+            period: .weekly,
+            deductWhenMissed: true
+        )
+        let optedOut = minimumRule(
+            familyID: familyID,
+            title: "Make bed",
+            points: 75,
+            minimum: 4,
+            period: .weekly,
+            deductWhenMissed: false
+        )
+        let weekEnding = date(2026, 9, 12)
+        let entry = LedgerEntry(
+            memberID: child.id,
+            ruleID: optedIn.id,
+            occurredAt: date(2026, 9, 10),
+            weekEnding: weekEnding,
+            title: optedIn.title,
+            points: 0,
+            kind: .reward,
+            status: .approved,
+            submittedBy: "Parent",
+            quantity: 3
+        )
+
+        let deductions = PointsEngine.minimumMissDeductions(
+            for: child,
+            weekEnding: weekEnding,
+            rules: [optedIn, optedOut],
+            entries: [entry],
+            calendar: calendar
+        )
+
+        XCTAssertEqual(deductions.count, 1)
+        XCTAssertEqual(deductions.first?.ruleID, optedIn.id)
+        XCTAssertEqual(deductions.first?.completedQuantity, 3)
+        XCTAssertEqual(deductions.first?.requiredQuantity, 4)
+        XCTAssertEqual(deductions.first?.points, 100)
+    }
+
+    func testWeeklyMinimumMetDoesNotProposeDeduction() {
+        let familyID = UUID()
+        let child = FamilyMember(familyID: familyID, name: "Child", role: .child)
+        let rule = minimumRule(
+            familyID: familyID,
+            title: "Homework",
+            points: 100,
+            minimum: 4,
+            period: .weekly,
+            deductWhenMissed: true
+        )
+        let weekEnding = date(2026, 9, 12)
+        let entries = [2.0, 2.0].map { quantity in
+            LedgerEntry(
+                memberID: child.id,
+                ruleID: rule.id,
+                weekEnding: weekEnding,
+                title: rule.title,
+                points: 0,
+                kind: .reward,
+                status: .approved,
+                submittedBy: "Parent",
+                quantity: quantity
+            )
+        }
+
+        XCTAssertTrue(
+            PointsEngine.minimumMissDeductions(
+                for: child,
+                weekEnding: weekEnding,
+                rules: [rule],
+                entries: entries,
+                calendar: calendar
+            ).isEmpty
+        )
+    }
+
+    func testMonthlyMinimumIsProposedOnlyInWeekContainingMonthEnd() {
+        let familyID = UUID()
+        let child = FamilyMember(familyID: familyID, name: "Child", role: .child)
+        let rule = minimumRule(
+            familyID: familyID,
+            title: "Clean bedroom",
+            points: 150,
+            minimum: 2,
+            period: .monthly,
+            deductWhenMissed: true
+        )
+        let octoberEntry = LedgerEntry(
+            memberID: child.id,
+            ruleID: rule.id,
+            occurredAt: date(2026, 10, 15),
+            weekEnding: date(2026, 10, 17),
+            title: rule.title,
+            points: 0,
+            kind: .reward,
+            status: .approved,
+            submittedBy: "Parent"
+        )
+
+        let closingWeek = PointsEngine.minimumMissDeductions(
+            for: child,
+            weekEnding: date(2026, 10, 31),
+            rules: [rule],
+            entries: [octoberEntry],
+            calendar: calendar
+        )
+        let followingWeek = PointsEngine.minimumMissDeductions(
+            for: child,
+            weekEnding: date(2026, 11, 7),
+            rules: [rule],
+            entries: [octoberEntry],
+            calendar: calendar
+        )
+
+        XCTAssertEqual(closingWeek.first?.completedQuantity, 1)
+        XCTAssertEqual(closingWeek.first?.points, 150)
+        XCTAssertTrue(followingWeek.isEmpty)
+    }
+
+    func testSettlementAppliesOnlyParentSelectedMinimumDeductions() {
+        let familyID = UUID()
+        let child = FamilyMember(
+            familyID: familyID,
+            name: "Child",
+            birthDate: date(2018, 1, 1),
+            role: .child
+        )
+        let homework = minimumRule(
+            familyID: familyID,
+            title: "Homework",
+            points: 100,
+            minimum: 4,
+            period: .weekly,
+            deductWhenMissed: true
+        )
+        let chores = minimumRule(
+            familyID: familyID,
+            title: "Chores",
+            points: 75,
+            minimum: 3,
+            period: .weekly,
+            deductWhenMissed: true
+        )
+
+        let draft = PointsEngine.settlementDrafts(
+            weekEnding: date(2026, 9, 12),
+            members: [child],
+            entries: [],
+            settlements: [],
+            rules: [homework, chores],
+            calendar: calendar
+        ).first!
+
+        XCTAssertEqual(draft.finalPoints, 800)
+        XCTAssertEqual(draft.minimumMissDeductions.count, 2)
+        XCTAssertEqual(draft.deductionPoints(applying: [homework.id]), 100)
+        XCTAssertEqual(draft.finalPoints(applying: [homework.id]), 700)
+        XCTAssertEqual(draft.cashAmount(applying: [homework.id]), Decimal(7))
+        XCTAssertEqual(draft.finalPoints(applying: [homework.id, chores.id]), 625)
+    }
+
+    func testMinimumDeductionsIgnoreIneligibleRulesAndOtherFamilies() {
+        let familyID = UUID()
+        let child = FamilyMember(familyID: familyID, name: "Child", role: .child)
+        let eligible = minimumRule(
+            familyID: familyID,
+            title: "Eligible",
+            points: 100,
+            minimum: 2,
+            period: .weekly,
+            deductWhenMissed: true
+        )
+        let disabled = minimumRule(
+            familyID: familyID,
+            title: "Disabled",
+            points: 100,
+            minimum: 2,
+            period: .weekly,
+            deductWhenMissed: true
+        )
+        disabled.isEnabled = false
+        let penalty = RuleTemplate(
+            familyID: familyID,
+            title: "Penalty",
+            category: .behavior,
+            kind: .penalty,
+            defaultPoints: -100,
+            minimumTarget: 2,
+            deductStartingPointsWhenMinimumMissed: true
+        )
+        let otherFamily = minimumRule(
+            familyID: UUID(),
+            title: "Other family",
+            points: 100,
+            minimum: 2,
+            period: .weekly,
+            deductWhenMissed: true
+        )
+
+        let deductions = PointsEngine.minimumMissDeductions(
+            for: child,
+            weekEnding: date(2026, 9, 12),
+            rules: [disabled, otherFamily, penalty, eligible],
+            entries: [],
+            calendar: calendar
+        )
+
+        XCTAssertEqual(deductions.map(\.ruleID), [eligible.id])
+    }
+
+    func testOnlyApprovedEntriesCountTowardMinimum() {
+        let familyID = UUID()
+        let child = FamilyMember(familyID: familyID, name: "Child", role: .child)
+        let rule = minimumRule(
+            familyID: familyID,
+            title: "Reading",
+            points: 100,
+            minimum: 2,
+            period: .weekly,
+            deductWhenMissed: true
+        )
+        let weekEnding = date(2026, 9, 12)
+        let pendingEntry = LedgerEntry(
+            memberID: child.id,
+            ruleID: rule.id,
+            weekEnding: weekEnding,
+            title: rule.title,
+            points: 100,
+            kind: .reward,
+            status: .pending,
+            submittedBy: "Child",
+            quantity: 2
+        )
+
+        let deductions = PointsEngine.minimumMissDeductions(
+            for: child,
+            weekEnding: weekEnding,
+            rules: [rule],
+            entries: [pendingEntry],
+            calendar: calendar
+        )
+
+        XCTAssertEqual(deductions.first?.completedQuantity, 0)
+    }
+
+    func testMinimumRespectsConfiguredAwardInterval() {
+        let familyID = UUID()
+        let child = FamilyMember(familyID: familyID, name: "Child", role: .child)
+        let rule = minimumRule(
+            familyID: familyID,
+            title: "Practice",
+            points: 100,
+            minimum: 4,
+            period: .weekly,
+            deductWhenMissed: true
+        )
+        rule.frequencyValue = 2
+        let weekEnding = date(2026, 9, 12)
+
+        func deductions(for quantity: Double) -> [MinimumMissDeduction] {
+            let entry = LedgerEntry(
+                memberID: child.id,
+                ruleID: rule.id,
+                weekEnding: weekEnding,
+                title: rule.title,
+                points: 0,
+                kind: .reward,
+                status: .approved,
+                submittedBy: "Parent",
+                quantity: quantity
+            )
+            return PointsEngine.minimumMissDeductions(
+                for: child,
+                weekEnding: weekEnding,
+                rules: [rule],
+                entries: [entry],
+                calendar: calendar
+            )
+        }
+
+        XCTAssertEqual(deductions(for: 7).first?.requiredQuantity, 8)
+        XCTAssertTrue(deductions(for: 8).isEmpty)
+    }
+
+    func testSelectedDeductionCanCreateDebtAndZeroCashTransfer() {
+        let familyID = UUID()
+        let child = FamilyMember(
+            familyID: familyID,
+            name: "Child",
+            birthDate: date(2018, 1, 1),
+            role: .child
+        )
+        let rule = minimumRule(
+            familyID: familyID,
+            title: "Large deduction",
+            points: 900,
+            minimum: 1,
+            period: .weekly,
+            deductWhenMissed: true
+        )
+        let draft = PointsEngine.settlementDrafts(
+            weekEnding: date(2026, 9, 12),
+            members: [child],
+            entries: [],
+            settlements: [],
+            rules: [rule],
+            calendar: calendar
+        ).first!
+
+        XCTAssertEqual(draft.finalPoints(applying: [rule.id]), -100)
+        XCTAssertEqual(draft.cashAmount(applying: [rule.id]), 0)
+        XCTAssertEqual(draft.debtCarriedOut(applying: [rule.id]), -100)
+    }
+
     func testFamilyListRoleOrderIsParentsChildrenThenCaregivers() {
         let members = [
             FamilyMember(name: "Zoe Caregiver", role: .caregiver),
@@ -142,6 +470,26 @@ final class PointsEngineTests: XCTestCase {
 
     private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
         calendar.date(from: DateComponents(year: year, month: month, day: day))!
+    }
+
+    private func minimumRule(
+        familyID: UUID,
+        title: String,
+        points: Int,
+        minimum: Double,
+        period: RuleMinimumPeriod,
+        deductWhenMissed: Bool
+    ) -> RuleTemplate {
+        RuleTemplate(
+            familyID: familyID,
+            title: title,
+            category: .household,
+            kind: .reward,
+            defaultPoints: points,
+            minimumTarget: minimum,
+            deductStartingPointsWhenMinimumMissed: deductWhenMissed,
+            minimumPeriod: period
+        )
     }
 }
 

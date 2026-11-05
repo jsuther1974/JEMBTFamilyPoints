@@ -160,6 +160,8 @@ private struct RuleCatalogListView: View {
         target.growthEnabled = draft.growthEnabled
         target.growthKind = draft.growthKind
         target.growthAmount = draft.growthAmount
+        target.deductStartingPointsWhenMinimumMissed = draft.deductStartingPointsWhenMinimumMissed
+        target.minimumPeriod = draft.minimumPeriod
         target.warningUnits = 0
         target.acceleratorEnabled = false
         target.requiresApproval = true
@@ -245,6 +247,9 @@ private struct RuleDetailView: View {
                 Text("Point awards start on the \(ordinal(rule.firstAwardNumber)) award.")
                 if let lastAward = rule.lastAwardNumber {
                     Text("Point awards end after award \(lastAward).")
+                }
+                if rule.deductStartingPointsWhenMinimumMissed {
+                    Text("If the \(rule.minimumPeriod.title.lowercased()) minimum is missed, a parent can deduct \(abs(rule.defaultPoints).formatted()) points from the starting value.")
                 }
             }
 
@@ -395,6 +400,26 @@ private struct RuleEditorView: View {
                     Text("Choose a later starting award when the first few times do not count. Add an ending award to cap the total for the week.")
                 }
 
+                if catalog == .incentives {
+                    Section {
+                        Toggle(
+                            "Offer a starting-points deduction when the minimum is missed",
+                            isOn: $draft.deductStartingPointsWhenMinimumMissed
+                        )
+                        if draft.deductStartingPointsWhenMinimumMissed {
+                            Picker("Minimum period", selection: $draft.minimumPeriod) {
+                                ForEach(RuleMinimumPeriod.allCases) { period in
+                                    Text(period.title).tag(period)
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("Missed minimum")
+                    } footer: {
+                        Text("At settlement, the parent must review and approve subtracting this award’s point value from the child’s starting points. Monthly minimums are reviewed in the week when the month ends.")
+                    }
+                }
+
                 Section {
                     Toggle("Value grows with each additional award", isOn: $draft.growthEnabled)
                     if draft.growthEnabled {
@@ -535,6 +560,8 @@ private struct RuleDraft {
     var growthEnabled: Bool
     var growthKind: RuleGrowthKind
     var growthAmount: Double
+    var deductStartingPointsWhenMinimumMissed: Bool
+    var minimumPeriod: RuleMinimumPeriod
 
     @MainActor
     init(catalog: RuleCatalog, rule: RuleTemplate?, riders: [RuleRider]) {
@@ -556,6 +583,8 @@ private struct RuleDraft {
         growthAmount = rule?.growthEnabled == true
             ? (rule?.growthAmount ?? 100)
             : max(0, ((rule?.acceleratorMultiplier ?? 2) - 1) * 100)
+        deductStartingPointsWhenMinimumMissed = rule?.deductStartingPointsWhenMinimumMissed ?? false
+        minimumPeriod = rule?.minimumPeriod ?? .weekly
     }
 
     func signedPoints(for catalog: RuleCatalog) -> Int {

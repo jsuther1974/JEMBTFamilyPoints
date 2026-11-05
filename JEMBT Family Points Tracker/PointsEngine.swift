@@ -141,11 +141,83 @@ enum PointsEngine {
         }?.debtCarriedOut ?? 0
     }
 
+    static func minimumMissDeductions(
+        for child: FamilyMember,
+        weekEnding: Date,
+        rules: [RuleTemplate],
+        entries: [LedgerEntry],
+        calendar: Calendar = .current
+    ) -> [MinimumMissDeduction] {
+        rules
+            .filter {
+                $0.familyID == child.familyID &&
+                $0.isEnabled &&
+                $0.kind == .reward &&
+                $0.defaultPoints > 0 &&
+                $0.minimumTarget != nil &&
+                $0.deductStartingPointsWhenMinimumMissed
+            }
+            .compactMap { rule in
+                let matchingEntries = entries.filter {
+                    $0.memberID == child.id &&
+                    $0.ruleID == rule.id &&
+                    $0.status == .approved
+                }
+
+                let periodEntries: [LedgerEntry]
+                switch rule.minimumPeriod {
+                case .weekly:
+                    periodEntries = matchingEntries.filter {
+                        calendar.isDate($0.weekEnding, inSameDayAs: weekEnding)
+                    }
+                case .monthly:
+                    guard let month = monthClosing(inWeekEnding: weekEnding, calendar: calendar) else {
+                        return nil
+                    }
+                    periodEntries = matchingEntries.filter { month.contains($0.occurredAt) }
+                }
+
+                let completed = periodEntries.reduce(0.0) { $0 + max(0, $1.quantity) }
+                guard rule.awardCount(for: completed) < rule.firstAwardNumber else { return nil }
+
+                return MinimumMissDeduction(
+                    ruleID: rule.id,
+                    title: rule.title,
+                    period: rule.minimumPeriod,
+                    completedQuantity: completed,
+                    requiredQuantity: Double(rule.firstAwardNumber) * max(1, rule.frequencyValue),
+                    points: abs(rule.defaultPoints)
+                )
+            }
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+
+    private static func monthClosing(
+        inWeekEnding weekEnding: Date,
+        calendar: Calendar
+    ) -> DateInterval? {
+        let end = calendar.startOfDay(for: weekEnding)
+        guard let start = calendar.date(byAdding: .day, value: -6, to: end) else { return nil }
+
+        for offset in 0..<7 {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: start),
+                  let nextDay = calendar.date(byAdding: .day, value: 1, to: day) else { continue }
+            if calendar.component(.month, from: day) != calendar.component(.month, from: nextDay) {
+                return calendar.dateInterval(of: .month, for: day)
+            }
+        }
+        return nil
+    }
+
+
+
     static func settlementDrafts(
         weekEnding: Date,
         members: [FamilyMember],
         entries: [LedgerEntry],
         settlements: [WeeklySettlement],
+
+        rules: [RuleTemplate] = [],
         calendar: Calendar = .current
     ) -> [SettlementDraft] {
         let shares = parentPotShares(
@@ -177,6 +249,14 @@ enum PointsEngine {
                     calendar: calendar
                 )
                 let parentShare = shares[child.id] ?? 0
+
+                let minimumDeductions = minimumMissDeductions(
+                    for: child,
+                    weekEnding: weekEnding,
+                    rules: rules,
+                    entries: entries,
+                    calendar: calendar
+                )
                 let final = starting + debt + entryPoints + parentShare
                 let payablePoints = max(0, final)
 
@@ -187,6 +267,8 @@ enum PointsEngine {
                     debtCarriedIn: debt,
                     approvedEntryPoints: entryPoints,
                     parentPotShare: parentShare,
+
+                    minimumMissDeductions: minimumDeductions,
                     finalPoints: final,
                     cashAmount: Decimal(payablePoints) / 100,
                     debtCarriedOut: min(0, final)
