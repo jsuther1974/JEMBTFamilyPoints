@@ -53,6 +53,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
     func testAddMemberShowsInviteReadySheetImmediately() throws {
         let app = XCUIApplication()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-admin-\(UUID().uuidString)@local"
+        app.launchEnvironment["UITEST_DEFAULT_MEMBER_ROLE"] = "parent"
         app.launch()
 
         app.signInAndCreateFamilyForAddingMembers()
@@ -317,13 +318,6 @@ private extension XCUIApplication {
 
         let roleField = textFields["Role"]
         XCTAssertTrue(roleField.exists, "Expected a role field when adding a member.")
-        if keyboards.firstMatch.exists {
-            keyboards.firstMatch.swipeDown()
-        }
-        roleField.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)).tap()
-        let rolePicker = pickerWheels.firstMatch
-        XCTAssertTrue(rolePicker.waitForExistence(timeout: 5))
-        rolePicker.adjust(toPickerWheelValue: "Parent")
         XCTAssertEqual(roleField.value as? String, "Parent")
 
         let saveButton = navigationBars["Add Family Member"].buttons["Save"]

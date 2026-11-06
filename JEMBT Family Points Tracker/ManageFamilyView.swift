@@ -626,6 +626,12 @@ private struct MemberEditorView: View {
         member: FamilyMember? = nil,
         onSave: @escaping (MemberDraft) throws -> Void
     ) {
+        #if DEBUG
+        let defaultRole = ProcessInfo.processInfo.environment["UITEST_DEFAULT_MEMBER_ROLE"]
+            .flatMap(MemberRole.init(rawValue:)) ?? .child
+        #else
+        let defaultRole = MemberRole.child
+        #endif
         self.title = title
         self.isAddingMember = member == nil
         self.onSave = onSave
@@ -634,7 +640,7 @@ private struct MemberEditorView: View {
             emailAddress: member?.emailAddress ?? "",
             birthDate: member?.birthDate,
             sourceContactIdentifier: member?.sourceContactIdentifier,
-            role: member?.role ?? .child
+            role: member?.role ?? defaultRole
         ))
     }
 
@@ -688,10 +694,6 @@ private struct MemberEditorView: View {
                             onPrevious: { focusedField = .emailAddress }
                         )
                         .frame(width: 180, height: 32)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            focusedField = .role
-                        }
                     }
 
                     LabeledContent(draft.role == .child ? "Birthdate" : "Birthday (optional)") {
@@ -707,10 +709,6 @@ private struct MemberEditorView: View {
                             onPrevious: { focusedField = .role }
                         )
                         .frame(width: 180, height: 32)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            focusedField = .birthday
-                        }
                     }
                     if draft.role != .child, draft.birthDate != nil {
                         Button("Clear optional birthday") {
