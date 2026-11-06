@@ -607,6 +607,9 @@ private struct MemberEditorView: View {
     @State private var draft: MemberDraft
     @State private var validationMessage: String?
     @FocusState private var focusedField: Field?
+#if canImport(UIKit)
+    @State private var inputFocusCoordinator = MemberInputFocusCoordinator()
+#endif
 #if canImport(ContactsUI) && canImport(UIKit)
     @State private var showingContactPicker = false
     @State private var contactImportMessage: String?
@@ -626,12 +629,6 @@ private struct MemberEditorView: View {
         member: FamilyMember? = nil,
         onSave: @escaping (MemberDraft) throws -> Void
     ) {
-        #if DEBUG
-        let defaultRole = ProcessInfo.processInfo.environment["UITEST_DEFAULT_MEMBER_ROLE"]
-            .flatMap(MemberRole.init(rawValue:)) ?? .child
-        #else
-        let defaultRole = MemberRole.child
-        #endif
         self.title = title
         self.isAddingMember = member == nil
         self.onSave = onSave
@@ -640,7 +637,7 @@ private struct MemberEditorView: View {
             emailAddress: member?.emailAddress ?? "",
             birthDate: member?.birthDate,
             sourceContactIdentifier: member?.sourceContactIdentifier,
-            role: member?.role ?? defaultRole
+            role: member?.role ?? .child
         ))
     }
 
@@ -669,6 +666,33 @@ private struct MemberEditorView: View {
 #endif
 
                 Section {
+                    #if canImport(UIKit)
+                    MemberTextInputField(
+                        text: $draft.name,
+                        label: "Name",
+                        keyboardType: .default,
+                        autocapitalizationType: .words,
+                        autocorrectionType: .default,
+                        fieldID: "name",
+                        focusCoordinator: inputFocusCoordinator,
+                        onNext: { inputFocusCoordinator.focus("email") },
+                        onPrevious: {}
+                    )
+                    .frame(height: 32)
+
+                    MemberTextInputField(
+                        text: $draft.emailAddress,
+                        label: "Email address (optional)",
+                        keyboardType: .emailAddress,
+                        autocapitalizationType: .none,
+                        autocorrectionType: .no,
+                        fieldID: "email",
+                        focusCoordinator: inputFocusCoordinator,
+                        onNext: { inputFocusCoordinator.focus("role") },
+                        onPrevious: { inputFocusCoordinator.focus("name") }
+                    )
+                    .frame(height: 32)
+                    #else
                     TextField("Name", text: $draft.name)
                         .focused($focusedField, equals: .name)
                         .submitLabel(.next)
@@ -684,14 +708,15 @@ private struct MemberEditorView: View {
                         .onSubmit {
                             focusedField = .role
                         }
+                    #endif
 
                     #if canImport(UIKit)
                     LabeledContent("Role") {
                         RoleInputField(
                             role: $draft.role,
-                            isFocused: focusBinding(for: .role),
-                            onNext: { focusedField = .birthday },
-                            onPrevious: { focusedField = .emailAddress }
+                            focusCoordinator: inputFocusCoordinator,
+                            onNext: { inputFocusCoordinator.focus("birthday") },
+                            onPrevious: { inputFocusCoordinator.focus("email") }
                         )
                         .frame(width: 180, height: 32)
                     }
@@ -700,13 +725,16 @@ private struct MemberEditorView: View {
                         BirthdayInputField(
                             birthDate: $draft.birthDate,
                             defaultAge: draft.role == .child ? 10 : 30,
-                            isFocused: focusBinding(for: .birthday),
+                            focusCoordinator: inputFocusCoordinator,
                             onNext: {
-                                focusedField = draft.role != .child && draft.birthDate != nil
-                                    ? .removeBirthday
-                                    : nil
+                                if draft.role != .child && draft.birthDate != nil {
+                                    inputFocusCoordinator.clearFocus()
+                                    focusedField = .removeBirthday
+                                } else {
+                                    inputFocusCoordinator.clearFocus()
+                                }
                             },
-                            onPrevious: { focusedField = .role }
+                            onPrevious: { inputFocusCoordinator.focus("role") }
                         )
                         .frame(width: 180, height: 32)
                     }
@@ -768,7 +796,11 @@ private struct MemberEditorView: View {
             .task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
+                #if canImport(UIKit)
+                inputFocusCoordinator.focus("name")
+                #else
                 focusedField = .name
+                #endif
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -822,7 +854,7 @@ private struct MemberEditorView: View {
         contactImportMessage = draft.birthDate == nil
             ? "No full birthdate was available. Enter one for a child; it is optional for adults."
             : "Contact details imported. Review them and choose the member’s role before saving."
-        focusedField = .role
+        inputFocusCoordinator.focus("role")
     }
 #endif
 
@@ -831,12 +863,12 @@ private struct MemberEditorView: View {
         draft.emailAddress = draft.emailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !draft.name.isEmpty else {
             validationMessage = "Enter a name."
-            focusedField = .name
+            focus(.name)
             return
         }
         guard draft.role != .child || draft.birthDate != nil else {
             validationMessage = "Enter a birthdate for a child profile."
-            focusedField = .birthday
+            focus(.birthday)
             return
         }
         do {
@@ -867,6 +899,20 @@ private struct MemberEditorView: View {
         )
     }
 
+    private func focus(_ field: Field) {
+        #if canImport(UIKit)
+        switch field {
+        case .name: inputFocusCoordinator.focus("name")
+        case .emailAddress: inputFocusCoordinator.focus("email")
+        case .role: inputFocusCoordinator.focus("role")
+        case .birthday: inputFocusCoordinator.focus("birthday")
+        case .contacts, .removeBirthday: focusedField = field
+        }
+        #else
+        focusedField = field
+        #endif
+    }
+
     private var currentDefaultPoints: Int {
         PointsEngine.startingPoints(
             forBirthDate: draft.birthDate,
@@ -877,9 +923,92 @@ private struct MemberEditorView: View {
 }
 
 #if canImport(UIKit)
+@MainActor
+private final class MemberInputFocusCoordinator {
+    private final class WeakField {
+        weak var value: UITextField?
+
+        init(_ value: UITextField) {
+            self.value = value
+        }
+    }
+
+    private var fields: [String: WeakField] = [:]
+
+    func register(_ textField: UITextField, as fieldID: String) {
+        fields[fieldID] = WeakField(textField)
+    }
+
+    func focus(_ fieldID: String) {
+        guard let textField = fields[fieldID]?.value else { return }
+        textField.becomeFirstResponder()
+    }
+
+    func clearFocus() {
+        fields.values.compactMap(\.value).first(where: \.isFirstResponder)?.resignFirstResponder()
+    }
+}
+
+private struct MemberTextInputField: UIViewRepresentable {
+    @Binding var text: String
+    let label: String
+    let keyboardType: UIKeyboardType
+    let autocapitalizationType: UITextAutocapitalizationType
+    let autocorrectionType: UITextAutocorrectionType
+    let fieldID: String
+    let focusCoordinator: MemberInputFocusCoordinator
+    let onNext: () -> Void
+    let onPrevious: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIView(context: Context) -> TabNavigatingTextField {
+        let textField = TabNavigatingTextField()
+        textField.delegate = context.coordinator
+        textField.placeholder = label
+        textField.accessibilityLabel = label
+        textField.keyboardType = keyboardType
+        textField.autocapitalizationType = autocapitalizationType
+        textField.autocorrectionType = autocorrectionType
+        textField.returnKeyType = .next
+        textField.clearButtonMode = .whileEditing
+        textField.addTarget(context.coordinator, action: #selector(Coordinator.textChanged(_:)), for: .editingChanged)
+        focusCoordinator.register(textField, as: fieldID)
+        return textField
+    }
+
+    func updateUIView(_ textField: TabNavigatingTextField, context: Context) {
+        context.coordinator.parent = self
+        textField.onNext = onNext
+        textField.onPrevious = onPrevious
+        if textField.text != text {
+            textField.text = text
+        }
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: MemberTextInputField
+
+        init(parent: MemberTextInputField) {
+            self.parent = parent
+        }
+
+        @objc func textChanged(_ textField: UITextField) {
+            parent.text = textField.text ?? ""
+        }
+
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            parent.onNext()
+            return false
+        }
+    }
+}
+
 private struct RoleInputField: UIViewRepresentable {
     @Binding var role: MemberRole
-    @Binding var isFocused: Bool
+    let focusCoordinator: MemberInputFocusCoordinator
     let onNext: () -> Void
     let onPrevious: () -> Void
 
@@ -895,6 +1024,7 @@ private struct RoleInputField: UIViewRepresentable {
         textField.textAlignment = .right
         textField.tintColor = .clear
         textField.accessibilityLabel = "Role"
+        focusCoordinator.register(textField, as: "role")
 
         let picker = UIPickerView()
         picker.dataSource = context.coordinator
@@ -912,15 +1042,6 @@ private struct RoleInputField: UIViewRepresentable {
         textField.accessibilityValue = role.title
         if let index = roles.firstIndex(of: role) {
             context.coordinator.picker?.selectRow(index, inComponent: 0, animated: false)
-        }
-        synchronizeFocus(of: textField)
-    }
-
-    private func synchronizeFocus(of textField: UITextField) {
-        if isFocused, !textField.isFirstResponder, textField.window != nil {
-            DispatchQueue.main.async { textField.becomeFirstResponder() }
-        } else if !isFocused, textField.isFirstResponder {
-            textField.resignFirstResponder()
         }
     }
 
@@ -942,8 +1063,6 @@ private struct RoleInputField: UIViewRepresentable {
         func pickerView(_ pickerView: UIPickerView, didSelectRow row: Int, inComponent component: Int) {
             parent.role = parent.roles[row]
         }
-        func textFieldDidBeginEditing(_ textField: UITextField) { parent.isFocused = true }
-        func textFieldDidEndEditing(_ textField: UITextField) { parent.isFocused = false }
         func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
             false
         }
@@ -953,7 +1072,7 @@ private struct RoleInputField: UIViewRepresentable {
 private struct BirthdayInputField: UIViewRepresentable {
     @Binding var birthDate: Date?
     let defaultAge: Int
-    @Binding var isFocused: Bool
+    let focusCoordinator: MemberInputFocusCoordinator
     let onNext: () -> Void
     let onPrevious: () -> Void
 
@@ -967,6 +1086,7 @@ private struct BirthdayInputField: UIViewRepresentable {
         textField.textAlignment = .right
         textField.tintColor = .clear
         textField.accessibilityLabel = "Birthdate"
+        focusCoordinator.register(textField, as: "birthday")
 
         let picker = UIDatePicker()
         picker.datePickerMode = .date
@@ -997,16 +1117,6 @@ private struct BirthdayInputField: UIViewRepresentable {
         if let birthDate {
             context.coordinator.picker?.setDate(birthDate, animated: false)
         }
-        synchronizeFocus(of: textField, coordinator: context.coordinator)
-    }
-
-    private func synchronizeFocus(of textField: UITextField, coordinator: Coordinator) {
-        if isFocused, !textField.isFirstResponder, textField.window != nil {
-            coordinator.prepareDateIfNeeded()
-            DispatchQueue.main.async { textField.becomeFirstResponder() }
-        } else if !isFocused, textField.isFirstResponder {
-            textField.resignFirstResponder()
-        }
     }
 
     final class Coordinator: NSObject, UITextFieldDelegate {
@@ -1020,10 +1130,8 @@ private struct BirthdayInputField: UIViewRepresentable {
 
         func textFieldDidBeginEditing(_ textField: UITextField) {
             prepareDateIfNeeded()
-            parent.isFocused = true
         }
 
-        func textFieldDidEndEditing(_ textField: UITextField) { parent.isFocused = false }
         func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
             false
         }

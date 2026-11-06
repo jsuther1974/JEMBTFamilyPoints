@@ -53,7 +53,6 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
     func testAddMemberShowsInviteReadySheetImmediately() throws {
         let app = XCUIApplication()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-admin-\(UUID().uuidString)@local"
-        app.launchEnvironment["UITEST_DEFAULT_MEMBER_ROLE"] = "parent"
         app.launch()
 
         app.signInAndCreateFamilyForAddingMembers()
@@ -174,8 +173,20 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
             object: emailField
         )
         XCTAssertEqual(XCTWaiter.wait(for: [emailFocused], timeout: 2), .completed)
-        XCTAssertTrue(roleControl.exists)
-        XCTAssertTrue(birthdateField.exists)
+
+        app.typeKey(.tab, modifierFlags: [])
+        let roleFocused = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
+            object: roleControl
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [roleFocused], timeout: 2), .completed)
+
+        app.typeKey(.tab, modifierFlags: [])
+        let birthdateFocused = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
+            object: birthdateField
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [birthdateFocused], timeout: 2), .completed)
     }
 
     @MainActor
@@ -285,7 +296,7 @@ private extension XCUIApplication {
     func assertCurrentMemberCannotInvite() {
         let meLabelPredicate = NSPredicate(format: "label CONTAINS '(me)'")
         let meLabelElement = staticTexts.matching(meLabelPredicate).firstMatch
-        for _ in 0..<4 where !meLabelElement.exists {
+        for _ in 0..<8 where !meLabelElement.exists {
             swipeUp()
         }
         XCTAssertTrue(meLabelElement.waitForExistence(timeout: 8), "Expected a member row marked as '(me)'.")
@@ -316,9 +327,13 @@ private extension XCUIApplication {
         nameField.tap()
         nameField.typeText("UI Test Invite Recipient")
 
-        let roleField = textFields["Role"]
-        XCTAssertTrue(roleField.exists, "Expected a role field when adding a member.")
-        XCTAssertEqual(roleField.value as? String, "Parent")
+        let birthdateField = textFields["Birthdate"]
+        XCTAssertTrue(birthdateField.exists, "Expected a birthdate field for a child.")
+        birthdateField.tap()
+        let useDateButton = buttons["Use This Date"]
+        XCTAssertTrue(useDateButton.waitForExistence(timeout: 3))
+        useDateButton.tap()
+        XCTAssertNotEqual(birthdateField.value as? String, "Enter birthdate")
 
         let saveButton = navigationBars["Add Family Member"].buttons["Save"]
         XCTAssertTrue(saveButton.exists, "Expected save button in add member sheet.")
