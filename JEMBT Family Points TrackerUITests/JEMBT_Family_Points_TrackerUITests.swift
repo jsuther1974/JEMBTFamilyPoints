@@ -21,6 +21,25 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
     }
 
     @MainActor
+    func testRecordActivityDetectsFreshFamilyAdminAsAdult() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-record-adult-\(UUID().uuidString)@local"
+        app.launch()
+
+        app.signInAndCreateFamilyForAddingMembers()
+
+        let recordTab = app.tabBars.buttons["Record"]
+        XCTAssertTrue(recordTab.waitForExistence(timeout: 5))
+        recordTab.tap()
+
+        XCTAssertTrue(app.navigationBars["Record Activity"].waitForExistence(timeout: 5))
+        let accountType = app.staticTexts["submissionAccountType"]
+        XCTAssertTrue(accountType.waitForExistence(timeout: 5))
+        XCTAssertEqual(accountType.label, "Submitted by, Adult account")
+        XCTAssertFalse(app.switches["Submitted by a child"].exists)
+    }
+
+    @MainActor
     func testCurrentMemberRowDoesNotShowInviteActions() throws {
         let app = XCUIApplication()
         app.launch()
@@ -103,8 +122,75 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         app.buttons["Add family member"].tap()
 
         XCTAssertTrue(app.navigationBars["Add Family Member"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Enter birthdate"].exists, "Expected an explicit action for a child without a birthdate.")
-        XCTAssertFalse(app.datePickers["Birthdate"].exists, "A missing birthdate must not display a fabricated date.")
+        let birthdateField = app.textFields["Birthdate"]
+        XCTAssertTrue(birthdateField.exists, "Expected a keyboard-accessible birthdate field.")
+        XCTAssertEqual(birthdateField.value as? String, "Enter birthdate")
+    }
+
+    @MainActor
+    func testAddMemberStartsWithNameFocused() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-member-focus-\(UUID().uuidString)@local"
+        app.launch()
+
+        app.signInAndCreateFamilyForAddingMembers()
+        app.openFamilyTab()
+        app.buttons["Add family member"].tap()
+
+        let nameField = app.textFields["Name"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        XCTAssertEqual(
+            nameField.value(forKey: "hasKeyboardFocus") as? Bool,
+            true,
+            "Expected the Name field to receive focus when Add Family Member opens."
+        )
+    }
+
+    @MainActor
+    func testAddMemberTabOrderIncludesRoleAndBirthdate() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-member-tabs-\(UUID().uuidString)@local"
+        app.launch()
+
+        app.signInAndCreateFamilyForAddingMembers()
+        app.openFamilyTab()
+        app.buttons["Add family member"].tap()
+
+        let nameField = app.textFields["Name"]
+        let emailField = app.textFields["Email address (optional)"]
+        let roleControl = app.textFields["Role"]
+        let birthdateField = app.textFields["Birthdate"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        let nameFocused = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
+            object: nameField
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [nameFocused], timeout: 2), .completed)
+
+        app.typeKey(.tab, modifierFlags: [])
+        let emailFocused = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
+            object: emailField
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [emailFocused], timeout: 2), .completed)
+        XCTAssertTrue(roleControl.exists)
+        XCTAssertTrue(birthdateField.exists)
+    }
+
+    @MainActor
+    func testFamilyPageIncludesWeeklyStandingsWithoutDashboardTab() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        app.signInAndJoinDemoFamilyIfNeeded()
+        app.openFamilyTab()
+
+        let weekHeading = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH 'Week ending '")
+        ).firstMatch
+        XCTAssertTrue(weekHeading.waitForExistence(timeout: 5), "Expected weekly standings on the Family page.")
+        XCTAssertTrue(app.staticTexts["Pending approval"].exists)
+        XCTAssertFalse(app.tabBars.buttons["Dashboard"].exists)
     }
 
     @MainActor
@@ -198,6 +284,9 @@ private extension XCUIApplication {
     func assertCurrentMemberCannotInvite() {
         let meLabelPredicate = NSPredicate(format: "label CONTAINS '(me)'")
         let meLabelElement = staticTexts.matching(meLabelPredicate).firstMatch
+        for _ in 0..<4 where !meLabelElement.exists {
+            swipeUp()
+        }
         XCTAssertTrue(meLabelElement.waitForExistence(timeout: 8), "Expected a member row marked as '(me)'.")
 
         let meLabel = meLabelElement.label
@@ -226,10 +315,16 @@ private extension XCUIApplication {
         nameField.tap()
         nameField.typeText("UI Test Invite Recipient")
 
-        let enterBirthdateButton = buttons["Enter birthdate"]
-        XCTAssertTrue(enterBirthdateButton.exists, "Expected an explicit birthdate action for a child.")
-        enterBirthdateButton.tap()
-        XCTAssertFalse(enterBirthdateButton.exists, "Expected the entry action to be replaced after choosing a birthdate.")
+        let roleField = textFields["Role"]
+        XCTAssertTrue(roleField.exists, "Expected a role field when adding a member.")
+        if keyboards.firstMatch.exists {
+            keyboards.firstMatch.swipeDown()
+        }
+        roleField.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)).tap()
+        let rolePicker = pickerWheels.firstMatch
+        XCTAssertTrue(rolePicker.waitForExistence(timeout: 5))
+        rolePicker.adjust(toPickerWheelValue: "Parent")
+        XCTAssertEqual(roleField.value as? String, "Parent")
 
         let saveButton = navigationBars["Add Family Member"].buttons["Save"]
         XCTAssertTrue(saveButton.exists, "Expected save button in add member sheet.")

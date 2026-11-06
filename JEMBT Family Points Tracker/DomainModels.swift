@@ -595,6 +595,19 @@ extension FamilyMember {
         return Calendar.current.dateComponents([.year], from: birthDate, to: .now).year
     }
 
+    func isChildAccountHolder(
+        on date: Date = .now,
+        calendar: Calendar = .current
+    ) -> Bool {
+        guard let birthDate else { return role == .child }
+        let age = calendar.dateComponents(
+            [.year],
+            from: calendar.startOfDay(for: birthDate),
+            to: calendar.startOfDay(for: date)
+        ).year
+        return age.map { $0 < 18 } ?? (role == .child)
+    }
+
     var firstNameForSorting: String {
         name.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? name
     }
@@ -611,6 +624,20 @@ extension FamilyMember {
     }
 }
 
+enum ActivitySubmissionPolicy {
+    static func isChildAccountHolder(
+        member: FamilyMember?,
+        membershipRole: FamilyMembershipRole?,
+        on date: Date = .now,
+        calendar: Calendar = .current
+    ) -> Bool {
+        if let member {
+            return member.isChildAccountHolder(on: date, calendar: calendar)
+        }
+        return membershipRole == .child
+    }
+}
+
 enum FamilyMembershipRole: String, Codable, CaseIterable {
     case familyAdmin
     case owner
@@ -623,8 +650,8 @@ enum FamilyMembershipRole: String, Codable, CaseIterable {
 extension MemberRole {
     var familyListSortOrder: Int {
         switch self {
-        case .parent: 0
-        case .child: 1
+        case .child: 0
+        case .parent: 1
         case .caregiver: 2
         }
     }

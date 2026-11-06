@@ -7,9 +7,6 @@ struct ContentView: View {
     
     var body: some View {
         TabView(selection: $selectedTab) {
-            DashboardView()
-                .tabItem { Label("Dashboard", systemImage: "gauge.with.dots.needle.67percent") }
-                .tag("dashboard")
             LogActivityView()
                 .tabItem { Label("Record", systemImage: "plus.circle.fill") }
                 .tag("record")
@@ -56,80 +53,6 @@ struct ContentView: View {
     }
 }
 
-private struct DashboardView: View {
-    @Environment(AppleIDManager.self) private var appleIDManager
-    @Query(sort: \FamilyMember.name) private var members: [FamilyMember]
-    @Query private var entries: [LedgerEntry]
-    @Query private var settlements: [WeeklySettlement]
-    @Query private var rules: [RuleTemplate]
-
-    private var weekEnding: Date {
-        PointsEngine.weekEnding(containing: .now)
-    }
-
-    private var familyMembers: [FamilyMember] {
-        members.filter { $0.familyID == appleIDManager.currentFamily?.id }
-    }
-
-    private var familyEntries: [LedgerEntry] {
-        let ids = Set(familyMembers.map(\.id))
-        return entries.filter { ids.contains($0.memberID) }
-    }
-
-    private var familySettlements: [WeeklySettlement] {
-        let ids = Set(familyMembers.map(\.id))
-        return settlements.filter { ids.contains($0.childID) }
-    }
-
-    private var familyRules: [RuleTemplate] {
-        rules.filter { $0.familyID == appleIDManager.currentFamily?.id }
-    }
-
-    private var drafts: [SettlementDraft] {
-        return PointsEngine.settlementDrafts(
-            weekEnding: weekEnding,
-            members: familyMembers,
-            entries: familyEntries,
-            settlements: familySettlements,
-            rules: familyRules
-        )
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section("Week ending \(weekEnding.formatted(date: .abbreviated, time: .omitted))") {
-                    ForEach(drafts) { draft in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text(draft.child.name)
-                                    .font(.headline)
-                                Spacer()
-                                Text("\(draft.finalPoints) pts")
-                                    .font(.title3.bold())
-                            }
-                            Text("Base \(draft.startingPoints)  •  Debt \(draft.debtCarriedIn)  •  Entries \(draft.approvedEntryPoints)  •  Parent pot +\(draft.parentPotShare)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                Section("Pending approval") {
-                    let pending = familyEntries.filter { $0.status == .pending }
-                    if pending.isEmpty {
-                        Text("No pending submissions")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("\(pending.count) item\(pending.count == 1 ? "" : "s") waiting")
-                    }
-                }
-            }
-            .navigationTitle("Family Points")
-        }
-    }
-}
-
 private struct LogActivityView: View {
     @Environment(AppleIDManager.self) private var appleIDManager
     @Environment(\.modelContext) private var modelContext
@@ -141,7 +64,6 @@ private struct LogActivityView: View {
     @State private var quantity = 1.0
     @State private var points = 0
     @State private var notes = ""
-    @State private var submittedByChild = false
     @State private var errorMessage: String?
 
     private var rules: [RuleTemplate] {
@@ -156,6 +78,13 @@ private struct LogActivityView: View {
 
     private var selectedRule: RuleTemplate? {
         rules.first { $0.id == selectedRuleID }
+    }
+
+    private var submittedByChild: Bool {
+        ActivitySubmissionPolicy.isChildAccountHolder(
+            member: appleIDManager.currentFamilyMember,
+            membershipRole: appleIDManager.currentMembership?.role
+        )
     }
 
     var body: some View {
@@ -205,7 +134,15 @@ private struct LogActivityView: View {
 
                 Stepper("Points: \(points)", value: $points, in: -10_000...10_000)
                 TextField("Notes", text: $notes, axis: .vertical)
-                Toggle("Submitted by a child", isOn: $submittedByChild)
+                LabeledContent("Submitted by") {
+                    Text(submittedByChild ? "Child account" : "Adult account")
+                        .accessibilityIdentifier("submissionAccountType")
+                }
+                if submittedByChild {
+                    Text("This entry will be sent to a parent for approval.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 if let errorMessage {
                     Text(errorMessage)

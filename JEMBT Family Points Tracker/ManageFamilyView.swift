@@ -14,6 +14,9 @@ struct ManageFamilyView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \FamilyMember.name) private var members: [FamilyMember]
     @Query(sort: \FamilyInvitation.createdAt, order: .reverse) private var invitations: [FamilyInvitation]
+    @Query private var entries: [LedgerEntry]
+    @Query private var settlements: [WeeklySettlement]
+    @Query private var rules: [RuleTemplate]
     @State private var showingFamilyNameEditor = false
     @State private var showingAddMember = false
     @State private var editingMember: FamilyMember?
@@ -37,6 +40,30 @@ struct ManageFamilyView: View {
         return visibleMembers.sorted(by: FamilyMember.comesBeforeInFamilyList)
     }
 
+    private var weekEnding: Date {
+        PointsEngine.weekEnding(containing: .now)
+    }
+
+    private var familyEntries: [LedgerEntry] {
+        let memberIDs = Set(familyMembers.map(\.id))
+        return entries.filter { memberIDs.contains($0.memberID) }
+    }
+
+    private var weeklyStandings: [SettlementDraft] {
+        let memberIDs = Set(familyMembers.map(\.id))
+        return PointsEngine.settlementDrafts(
+            weekEnding: weekEnding,
+            members: familyMembers,
+            entries: familyEntries,
+            settlements: settlements.filter { memberIDs.contains($0.childID) },
+            rules: rules.filter { $0.familyID == appleIDManager.currentFamily?.id }
+        )
+    }
+
+    private var pendingApprovalCount: Int {
+        familyEntries.count { $0.status == .pending }
+    }
+
     var body: some View {
         List {
             if let errorMessage {
@@ -56,54 +83,61 @@ struct ManageFamilyView: View {
                 }
             }
 
-            Section {
-                if familyMembers.isEmpty {
+            Section("Week ending \(weekEnding.formatted(date: .abbreviated, time: .omitted))") {
+                if weeklyStandings.isEmpty {
+                    Text("Add a child to begin tracking weekly points.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(weeklyStandings) { standing in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(standing.child.name)
+                                    .font(.headline)
+                                Spacer()
+                                Text("\(standing.finalPoints) pts")
+                                    .font(.title3.bold())
+                            }
+                            Text("Base \(standing.startingPoints)  •  Debt \(standing.debtCarriedIn)  •  Entries \(standing.approvedEntryPoints)  •  Parent pot +\(standing.parentPotShare)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+
+            Section("Pending approval") {
+                Text(pendingApprovalCount == 0
+                     ? "No pending submissions"
+                     : "\(pendingApprovalCount) item\(pendingApprovalCount == 1 ? "" : "s") waiting")
+                    .foregroundStyle(pendingApprovalCount == 0 ? .secondary : .primary)
+            }
+
+            if familyMembers.isEmpty {
+                Section("Family members") {
                     ContentUnavailableView(
                         "No Members",
                         systemImage: "person.3",
                         description: Text(canEdit ? "Add your first family member." : "A family admin can add members.")
                     )
-                } else {
-                    ForEach(familyMembers) { member in
-                        MemberAdministrationRow(
-                            member: member,
-                            invitation: pendingInvitation(for: member),
-                            canEdit: canEdit,
-                            isCurrentMember: member.id == appleIDManager.currentFamilyMember?.id,
-                            onGenerateCode: { generateCode(for: member) },
-                            onEdit: { editingMember = member }
-                        )
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            if canEdit {
-                                Button("Remove", role: .destructive) {
-                                    memberPendingRemoval = member
-                                }
-                            }
-                        }
-                    }
                 }
-            } header: {
-                HStack {
-                    Text("Members")
-                    Spacer()
-                    if canEdit {
-                        Button {
-                            showingAddMember = true
-                        } label: {
-                            Image(systemName: "plus.circle.fill")
-                        }
-                        .accessibilityLabel("Add family member")
-                        .textCase(nil)
-                    }
-                }
+            } else {
+                memberSection(title: "Children", role: .child)
+                memberSection(title: "Parents", role: .parent)
+                memberSection(title: "Caregivers", role: .caregiver)
             }
         }
         .navigationTitle(displayedFamilyName)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             if canEdit {
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
                     familyNameEditButton
+                    Button {
+                        showingAddMember = true
+                    } label: {
+                        Image(systemName: "person.badge.plus")
+                    }
+                    .accessibilityLabel("Add family member")
                 }
             }
         }
@@ -149,6 +183,32 @@ struct ManageFamilyView: View {
         }
         .onAppear {
             restoreCurrentProfileIfNeeded()
+        }
+    }
+
+    @ViewBuilder
+    private func memberSection(title: String, role: MemberRole) -> some View {
+        let roleMembers = familyMembers.filter { $0.role == role }
+        if !roleMembers.isEmpty {
+            Section(title) {
+                ForEach(roleMembers) { member in
+                    MemberAdministrationRow(
+                        member: member,
+                        invitation: pendingInvitation(for: member),
+                        canEdit: canEdit,
+                        isCurrentMember: member.id == appleIDManager.currentFamilyMember?.id,
+                        onGenerateCode: { generateCode(for: member) },
+                        onEdit: { editingMember = member }
+                    )
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        if canEdit {
+                            Button("Remove", role: .destructive) {
+                                memberPendingRemoval = member
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -589,6 +649,7 @@ private struct MemberEditorView: View {
                         } label: {
                             Label("Choose from Contacts", systemImage: "person.crop.circle.badge.plus")
                         }
+                        .focusable(interactions: .edit)
                         .focused($focusedField, equals: .contacts)
                         if let contactImportMessage {
                             Text(contactImportMessage)
@@ -618,6 +679,46 @@ private struct MemberEditorView: View {
                             focusedField = .role
                         }
 
+                    #if canImport(UIKit)
+                    LabeledContent("Role") {
+                        RoleInputField(
+                            role: $draft.role,
+                            isFocused: focusBinding(for: .role),
+                            onNext: { focusedField = .birthday },
+                            onPrevious: { focusedField = .emailAddress }
+                        )
+                        .frame(width: 180, height: 32)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            focusedField = .role
+                        }
+                    }
+
+                    LabeledContent(draft.role == .child ? "Birthdate" : "Birthday (optional)") {
+                        BirthdayInputField(
+                            birthDate: $draft.birthDate,
+                            defaultAge: draft.role == .child ? 10 : 30,
+                            isFocused: focusBinding(for: .birthday),
+                            onNext: {
+                                focusedField = draft.role != .child && draft.birthDate != nil
+                                    ? .removeBirthday
+                                    : nil
+                            },
+                            onPrevious: { focusedField = .role }
+                        )
+                        .frame(width: 180, height: 32)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            focusedField = .birthday
+                        }
+                    }
+                    if draft.role != .child, draft.birthDate != nil {
+                        Button("Clear optional birthday") {
+                            draft.birthDate = nil
+                        }
+                        .focused($focusedField, equals: .removeBirthday)
+                    }
+                    #else
                     Picker("Role", selection: $draft.role) {
                         Text("Child").tag(MemberRole.child)
                         Text("Parent").tag(MemberRole.parent)
@@ -632,20 +733,13 @@ private struct MemberEditorView: View {
                             displayedComponents: .date
                         )
                         .focused($focusedField, equals: .birthday)
-                        if draft.role != .child {
-                            Button("Clear optional birthday") {
-                                draft.birthDate = nil
-                            }
-                            .focused($focusedField, equals: .removeBirthday)
-                        }
                     } else {
                         Button(draft.role == .child ? "Enter birthdate" : "Add birthday") {
-                            let defaultAge = draft.role == .child ? 10 : 30
-                            draft.birthDate = Calendar.current.date(byAdding: .year, value: -defaultAge, to: .now) ?? .now
                             focusedField = .birthday
                         }
                         .focused($focusedField, equals: .birthday)
                     }
+                    #endif
 
                     if draft.role == .child {
                         LabeledContent("Current default points") {
@@ -670,8 +764,14 @@ private struct MemberEditorView: View {
                     }
                 }
             }
+            .defaultFocus($focusedField, .name)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
+            .task {
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                focusedField = .name
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -756,6 +856,19 @@ private struct MemberEditorView: View {
         )
     }
 
+    private func focusBinding(for field: Field) -> Binding<Bool> {
+        Binding(
+            get: { focusedField == field },
+            set: { isFocused in
+                if isFocused {
+                    focusedField = field
+                } else if focusedField == field {
+                    focusedField = nil
+                }
+            }
+        )
+    }
+
     private var currentDefaultPoints: Int {
         PointsEngine.startingPoints(
             forBirthDate: draft.birthDate,
@@ -764,6 +877,211 @@ private struct MemberEditorView: View {
         )
     }
 }
+
+#if canImport(UIKit)
+private struct RoleInputField: UIViewRepresentable {
+    @Binding var role: MemberRole
+    @Binding var isFocused: Bool
+    let onNext: () -> Void
+    let onPrevious: () -> Void
+
+    private let roles: [MemberRole] = [.child, .parent, .caregiver]
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIView(context: Context) -> TabNavigatingTextField {
+        let textField = TabNavigatingTextField()
+        textField.delegate = context.coordinator
+        textField.textAlignment = .right
+        textField.tintColor = .clear
+        textField.accessibilityLabel = "Role"
+
+        let picker = UIPickerView()
+        picker.dataSource = context.coordinator
+        picker.delegate = context.coordinator
+        textField.inputView = picker
+        context.coordinator.picker = picker
+        return textField
+    }
+
+    func updateUIView(_ textField: TabNavigatingTextField, context: Context) {
+        context.coordinator.parent = self
+        textField.onNext = onNext
+        textField.onPrevious = onPrevious
+        textField.text = role.title
+        textField.accessibilityValue = role.title
+        if let index = roles.firstIndex(of: role) {
+            context.coordinator.picker?.selectRow(index, inComponent: 0, animated: false)
+        }
+        synchronizeFocus(of: textField)
+    }
+
+    private func synchronizeFocus(of textField: UITextField) {
+        if isFocused, !textField.isFirstResponder, textField.window != nil {
+            DispatchQueue.main.async { textField.becomeFirstResponder() }
+        } else if !isFocused, textField.isFirstResponder {
+            textField.resignFirstResponder()
+        }
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate, UIPickerViewDataSource, UIPickerViewDelegate {
+        var parent: RoleInputField
+        weak var picker: UIPickerView?
+
+        init(parent: RoleInputField) {
+            self.parent = parent
+        }
+
+        func numberOfComponents(in pickerView: UIPickerView) -> Int { 1 }
+        func pickerView(_ pickerView: UIPickerView, numberOfRowsInComponent component: Int) -> Int {
+            parent.roles.count
+        }
+        func pickerView(_ pickerView: UIPickerView, titleForRow row: Int, forComponent component: Int) -> String? {
+            parent.roles[row].title
+        }
+        func pickerView(_ pickerView: UIPickerView, didSelectRow row: Int, inComponent component: Int) {
+            parent.role = parent.roles[row]
+        }
+        func textFieldDidBeginEditing(_ textField: UITextField) { parent.isFocused = true }
+        func textFieldDidEndEditing(_ textField: UITextField) { parent.isFocused = false }
+        func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
+            false
+        }
+    }
+}
+
+private struct BirthdayInputField: UIViewRepresentable {
+    @Binding var birthDate: Date?
+    let defaultAge: Int
+    @Binding var isFocused: Bool
+    let onNext: () -> Void
+    let onPrevious: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIView(context: Context) -> TabNavigatingTextField {
+        let textField = TabNavigatingTextField()
+        textField.delegate = context.coordinator
+        textField.textAlignment = .right
+        textField.tintColor = .clear
+        textField.accessibilityLabel = "Birthdate"
+
+        let picker = UIDatePicker()
+        picker.datePickerMode = .date
+        picker.preferredDatePickerStyle = .wheels
+        picker.maximumDate = .now
+        picker.addTarget(context.coordinator, action: #selector(Coordinator.dateChanged(_:)), for: .valueChanged)
+        textField.inputView = picker
+        context.coordinator.picker = picker
+
+        let toolbar = UIToolbar()
+        toolbar.sizeToFit()
+        toolbar.items = [
+            UIBarButtonItem(systemItem: .flexibleSpace),
+            UIBarButtonItem(title: "Use This Date", style: .done, target: context.coordinator, action: #selector(Coordinator.useSelectedDate))
+        ]
+        textField.inputAccessoryView = toolbar
+        context.coordinator.textField = textField
+        return textField
+    }
+
+    func updateUIView(_ textField: TabNavigatingTextField, context: Context) {
+        context.coordinator.parent = self
+        textField.onNext = onNext
+        textField.onPrevious = onPrevious
+        textField.placeholder = birthDate == nil ? "Enter birthdate" : nil
+        textField.text = birthDate?.formatted(date: .abbreviated, time: .omitted)
+        textField.accessibilityValue = textField.text ?? "Not entered"
+        if let birthDate {
+            context.coordinator.picker?.setDate(birthDate, animated: false)
+        }
+        synchronizeFocus(of: textField, coordinator: context.coordinator)
+    }
+
+    private func synchronizeFocus(of textField: UITextField, coordinator: Coordinator) {
+        if isFocused, !textField.isFirstResponder, textField.window != nil {
+            coordinator.prepareDateIfNeeded()
+            DispatchQueue.main.async { textField.becomeFirstResponder() }
+        } else if !isFocused, textField.isFirstResponder {
+            textField.resignFirstResponder()
+        }
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: BirthdayInputField
+        weak var picker: UIDatePicker?
+        weak var textField: UITextField?
+
+        init(parent: BirthdayInputField) {
+            self.parent = parent
+        }
+
+        func textFieldDidBeginEditing(_ textField: UITextField) {
+            prepareDateIfNeeded()
+            parent.isFocused = true
+        }
+
+        func textFieldDidEndEditing(_ textField: UITextField) { parent.isFocused = false }
+        func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
+            false
+        }
+
+        func prepareDateIfNeeded() {
+            guard parent.birthDate == nil else { return }
+            let date = Calendar.current.date(byAdding: .year, value: -parent.defaultAge, to: .now) ?? .now
+            picker?.date = date
+        }
+
+        @objc func dateChanged(_ sender: UIDatePicker) {
+            parent.birthDate = sender.date
+        }
+
+        @objc func useSelectedDate() {
+            if let picker {
+                parent.birthDate = picker.date
+            }
+            textField?.resignFirstResponder()
+        }
+    }
+}
+
+private final class TabNavigatingTextField: UITextField {
+    var onNext: (() -> Void)?
+    var onPrevious: (() -> Void)?
+
+    override var keyCommands: [UIKeyCommand]? {
+        let next = UIKeyCommand(input: "\t", modifierFlags: [], action: #selector(moveToNextField))
+        let previous = UIKeyCommand(input: "\t", modifierFlags: .shift, action: #selector(moveToPreviousField))
+        next.wantsPriorityOverSystemBehavior = true
+        previous.wantsPriorityOverSystemBehavior = true
+        return (super.keyCommands ?? []) + [next, previous]
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if let key = presses.first?.key, key.keyCode == .keyboardTab {
+            if key.modifierFlags.contains(.shift) {
+                onPrevious?()
+            } else {
+                onNext?()
+            }
+            return
+        }
+        super.pressesBegan(presses, with: event)
+    }
+
+    @objc private func moveToNextField() {
+        onNext?()
+    }
+
+    @objc private func moveToPreviousField() {
+        onPrevious?()
+    }
+}
+#endif
 
 private enum ManageFamilyError: LocalizedError {
     case noSelectedFamily

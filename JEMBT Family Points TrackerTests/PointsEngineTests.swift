@@ -453,7 +453,7 @@ final class PointsEngineTests: XCTestCase {
         XCTAssertEqual(draft.debtCarriedOut(applying: [rule.id]), -100)
     }
 
-    func testFamilyListRoleOrderIsParentsChildrenThenCaregivers() {
+    func testFamilyListRoleOrderIsChildrenParentsThenCaregivers() {
         let members = [
             FamilyMember(name: "Zoe Caregiver", role: .caregiver),
             FamilyMember(name: "Zoe Child", birthDate: date(2016, 1, 1), role: .child),
@@ -464,7 +464,7 @@ final class PointsEngineTests: XCTestCase {
 
         XCTAssertEqual(
             members.sorted(by: FamilyMember.comesBeforeInFamilyList).map(\.name),
-            ["Amy Parent", "Zoe Parent", "Amy Child", "Zoe Child", "Zoe Caregiver"]
+            ["Amy Child", "Zoe Child", "Amy Parent", "Zoe Parent", "Zoe Caregiver"]
         )
     }
 
@@ -490,6 +490,84 @@ final class PointsEngineTests: XCTestCase {
             deductStartingPointsWhenMinimumMissed: deductWhenMissed,
             minimumPeriod: period
         )
+    }
+}
+
+final class ActivitySubmissionPolicyTests: XCTestCase {
+    private var gregorianUTC: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    func testBirthdateOverridesProfileRoleForSubmissionApproval() {
+        let evaluationDate = date(2026, 11, 5)
+        let minorWithParentRole = FamilyMember(
+            name: "Minor",
+            birthDate: date(2010, 1, 1),
+            role: .parent
+        )
+        let adultWithChildRole = FamilyMember(
+            name: "Adult",
+            birthDate: date(2000, 1, 1),
+            role: .child
+        )
+
+        XCTAssertTrue(ActivitySubmissionPolicy.isChildAccountHolder(
+            member: minorWithParentRole,
+            membershipRole: .parent,
+            on: evaluationDate,
+            calendar: gregorianUTC
+        ))
+        XCTAssertFalse(ActivitySubmissionPolicy.isChildAccountHolder(
+            member: adultWithChildRole,
+            membershipRole: .child,
+            on: evaluationDate,
+            calendar: gregorianUTC
+        ))
+    }
+
+    func testSubmissionDetectionChangesOnEighteenthBirthday() {
+        let accountHolder = FamilyMember(
+            name: "Account Holder",
+            birthDate: date(2008, 11, 5),
+            role: .child
+        )
+
+        XCTAssertTrue(accountHolder.isChildAccountHolder(
+            on: date(2026, 11, 4),
+            calendar: gregorianUTC
+        ))
+        XCTAssertFalse(accountHolder.isChildAccountHolder(
+            on: date(2026, 11, 5),
+            calendar: gregorianUTC
+        ))
+    }
+
+    func testRoleIsUsedWhenAccountHolderBirthdateIsUnavailable() {
+        let child = FamilyMember(name: "Child", role: .child)
+        let parent = FamilyMember(name: "Parent", role: .parent)
+
+        XCTAssertTrue(ActivitySubmissionPolicy.isChildAccountHolder(
+            member: child,
+            membershipRole: .parent
+        ))
+        XCTAssertFalse(ActivitySubmissionPolicy.isChildAccountHolder(
+            member: parent,
+            membershipRole: .child
+        ))
+        XCTAssertTrue(ActivitySubmissionPolicy.isChildAccountHolder(
+            member: nil,
+            membershipRole: .child
+        ))
+        XCTAssertFalse(ActivitySubmissionPolicy.isChildAccountHolder(
+            member: nil,
+            membershipRole: .parent
+        ))
+    }
+
+    private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        gregorianUTC.date(from: DateComponents(year: year, month: month, day: day))!
     }
 }
 
