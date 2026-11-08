@@ -13,9 +13,11 @@ struct ContentView: View {
             RuleCatalogView()
                 .tabItem { Label("Rules", systemImage: "list.bullet.rectangle") }
                 .tag("rules")
-            ApprovalsView()
-                .tabItem { Label("Approvals", systemImage: "checkmark.circle") }
-                .tag("approvals")
+            NavigationStack {
+                WeeklyLedgerView(weekEnding: PointsEngine.weekEnding(containing: .now))
+            }
+                .tabItem { Label("Ledger", systemImage: "tablecells") }
+                .tag("ledger")
             SettlementView()
                 .tabItem { Label("Settlement", systemImage: "dollarsign.circle") }
                 .tag("settlement")
@@ -68,20 +70,24 @@ private struct LogActivityView: View {
 
     private var rules: [RuleTemplate] {
         allRules.filter {
-            $0.familyID == appleIDManager.currentFamily?.id && $0.isEnabled
+            $0.familyID == appleIDManager.currentFamily?.id &&
+            $0.isEnabled &&
+            (submissionKind != .caregiverRecommendation || $0.catalog != .tradingPost)
         }
     }
 
     private var familyMembers: [FamilyMember] {
-        members.filter { $0.familyID == appleIDManager.currentFamily?.id }
+        members.filter {
+            $0.familyID == appleIDManager.currentFamily?.id && $0.role.participatesInPoints
+        }
     }
 
     private var selectedRule: RuleTemplate? {
         rules.first { $0.id == selectedRuleID }
     }
 
-    private var submittedByChild: Bool {
-        ActivitySubmissionPolicy.isChildAccountHolder(
+    private var submissionKind: ActivitySubmissionKind {
+        ActivitySubmissionPolicy.submissionKind(
             member: appleIDManager.currentFamilyMember,
             membershipRole: appleIDManager.currentMembership?.role
         )
@@ -135,11 +141,13 @@ private struct LogActivityView: View {
                 Stepper("Points: \(points)", value: $points, in: -10_000...10_000)
                 TextField("Notes", text: $notes, axis: .vertical)
                 LabeledContent("Submitted by") {
-                    Text(submittedByChild ? "Child account" : "Adult account")
+                    Text(submissionKind.accountDescription)
                         .accessibilityIdentifier("submissionAccountType")
                 }
-                if submittedByChild {
-                    Text("This entry will be sent to a parent for approval.")
+                if submissionKind.requiresParentApproval {
+                    Text(submissionKind == .caregiverRecommendation
+                         ? "This recommendation will be sent to a parent for approval."
+                         : "This entry will be sent to a parent for approval.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -173,10 +181,10 @@ private struct LogActivityView: View {
             notes: notes,
             points: points,
             kind: rule.kind,
-            status: submittedByChild ? .pending : .approved,
-            submittedBy: submittedByChild ? "Child" : "Parent",
-            reviewedBy: submittedByChild ? nil : "Parent",
-            reviewedAt: submittedByChild ? nil : .now,
+            status: submissionKind.requiresParentApproval ? .pending : .approved,
+            submittedBy: submissionKind.submittedBy,
+            reviewedBy: submissionKind.requiresParentApproval ? nil : "Parent",
+            reviewedAt: submissionKind.requiresParentApproval ? nil : .now,
             quantity: quantity,
             measurementUnit: rule.measurementUnit,
             riderTitle: nil
@@ -201,78 +209,6 @@ private struct LogActivityView: View {
             return
         }
         points = rule.calculatedPoints(quantity: quantity)
-    }
-}
-
-private struct ApprovalsView: View {
-    @Environment(AppleIDManager.self) private var appleIDManager
-    @Environment(\.modelContext) private var modelContext
-    @Query(sort: \LedgerEntry.occurredAt, order: .reverse) private var entries: [LedgerEntry]
-    @Query private var members: [FamilyMember]
-    @State private var errorMessage: String?
-
-    private var pending: [LedgerEntry] {
-        let ids = Set(members.filter { $0.familyID == appleIDManager.currentFamily?.id }.map(\.id))
-        return entries.filter { ids.contains($0.memberID) && $0.status == .pending }
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                if let errorMessage {
-                    Text(errorMessage)
-                        .foregroundStyle(.red)
-                }
-
-                if pending.isEmpty {
-                    ContentUnavailableView(
-                        "No Pending Items",
-                        systemImage: "checkmark.circle",
-                        description: Text("Child submissions will appear here.")
-                    )
-                } else {
-                    ForEach(pending) { entry in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(entry.title)
-                                .font(.headline)
-                            Text("\(memberName(entry.memberID)) • \(entry.points) points")
-                                .foregroundStyle(.secondary)
-                            if !entry.notes.isEmpty {
-                                Text(entry.notes)
-                            }
-                            HStack {
-                                Button("Reject", role: .destructive) {
-                                    review(entry, status: .rejected)
-                                }
-                                Spacer()
-                                Button("Approve") {
-                                    review(entry, status: .approved)
-                                }
-                                .buttonStyle(.borderedProminent)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-            }
-            .navigationTitle("Approvals")
-        }
-    }
-
-    private func memberName(_ id: UUID) -> String {
-        members.first { $0.id == id }?.name ?? "Unknown"
-    }
-
-    private func review(_ entry: LedgerEntry, status: ApprovalStatus) {
-        entry.status = status
-        entry.reviewedBy = "Parent"
-        entry.reviewedAt = .now
-        do {
-            try modelContext.save()
-            errorMessage = nil
-        } catch {
-            errorMessage = "The review could not be saved: \(error.localizedDescription)"
-        }
     }
 }
 

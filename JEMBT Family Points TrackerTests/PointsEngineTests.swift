@@ -468,6 +468,297 @@ final class PointsEngineTests: XCTestCase {
         )
     }
 
+    func testLedgerSummariesAggregateCurrentWeekAndHistoricalRecords() {
+        let familyID = UUID()
+        let child = FamilyMember(familyID: familyID, name: "Child", role: .child)
+        let reward = RuleTemplate(
+            familyID: familyID,
+            title: "Helping",
+            category: .household,
+            kind: .reward,
+            defaultPoints: 100,
+            growthEnabled: true,
+            growthKind: .fixedPoints,
+            growthAmount: 25
+        )
+        let currentWeek = date(2026, 11, 7)
+        let previousWeek = date(2026, 10, 31)
+        let entries = [
+            ledgerEntry(child: child, rule: reward, week: currentWeek, points: 100, status: .approved),
+            ledgerEntry(child: child, rule: reward, week: currentWeek, points: 125, status: .pending),
+            ledgerEntry(child: child, rule: reward, week: previousWeek, points: 100, status: .approved),
+            ledgerEntry(child: child, rule: reward, week: previousWeek, points: 125, status: .approved),
+            ledgerEntry(child: child, rule: reward, week: previousWeek, points: 150, status: .approved)
+        ]
+
+        let summary = PointsEngine.ledgerSummaries(
+            weekEnding: currentWeek,
+            memberIDs: [child.id],
+            entries: entries,
+            rules: [reward],
+            calendar: calendar
+        ).first
+
+        XCTAssertEqual(summary?.weeklyCount, 2)
+        XCTAssertEqual(summary?.weeklyPoints, 225)
+        XCTAssertEqual(summary?.recordWeeklyCount, 3)
+        XCTAssertEqual(summary?.recordWeeklyPoints, 375)
+        XCTAssertEqual(summary?.nextPoints, 150)
+        XCTAssertEqual(summary?.approvedCount, 1)
+        XCTAssertEqual(summary?.approvedPoints, 100)
+        XCTAssertEqual(summary?.pendingCount, 1)
+        XCTAssertEqual(summary?.pendingPoints, 125)
+        XCTAssertEqual(summary?.rejectedCount, 0)
+        XCTAssertEqual(summary?.pendingEntryIDs, [entries[1].id])
+        XCTAssertEqual(summary?.hasPendingEntries, true)
+    }
+
+    func testPenaltyLedgerUsesTheAllTimeWeeklyLowAndIgnoresRejectedEntries() {
+        let familyID = UUID()
+        let parent = FamilyMember(familyID: familyID, name: "Parent", role: .parent)
+        let penalty = RuleTemplate(
+            familyID: familyID,
+            title: "Shouting",
+            category: .behavior,
+            kind: .penalty,
+            defaultPoints: -50,
+            growthEnabled: true,
+            growthKind: .percentage,
+            growthAmount: 100
+        )
+        let currentWeek = date(2026, 11, 7)
+        let entries = [
+            ledgerEntry(child: parent, rule: penalty, week: currentWeek, points: -50, status: .approved),
+            ledgerEntry(child: parent, rule: penalty, week: currentWeek, points: -100, status: .approved),
+            ledgerEntry(child: parent, rule: penalty, week: currentWeek, points: -400, status: .rejected),
+            ledgerEntry(child: parent, rule: penalty, week: date(2026, 10, 31), points: -50, status: .approved)
+        ]
+
+        let summary = PointsEngine.ledgerSummaries(
+            weekEnding: currentWeek,
+            memberIDs: [parent.id],
+            entries: entries,
+            rules: [penalty],
+            calendar: calendar
+        ).first
+
+        XCTAssertEqual(summary?.weeklyCount, 2)
+        XCTAssertEqual(summary?.weeklyPoints, -150)
+        XCTAssertEqual(summary?.recordWeeklyPoints, -150)
+        XCTAssertEqual(summary?.nextPoints, -200)
+        XCTAssertEqual(summary?.approvedCount, 2)
+        XCTAssertEqual(summary?.pendingCount, 0)
+        XCTAssertEqual(summary?.rejectedCount, 1)
+    }
+
+    func testLedgerIncludesPendingRewardShopPurchases() {
+        let familyID = UUID()
+        let child = FamilyMember(familyID: familyID, name: "Child", role: .child)
+        let purchase = RuleTemplate(
+            familyID: familyID,
+            title: "Movie Night",
+            category: .rewardStore,
+            kind: .purchase,
+            defaultPoints: -500
+        )
+        let weekEnding = date(2026, 11, 7)
+        let entry = LedgerEntry(
+            memberID: child.id,
+            ruleID: purchase.id,
+            weekEnding: weekEnding,
+            title: purchase.title,
+            points: -500,
+            kind: .purchase,
+            status: .pending,
+            submittedBy: "Child"
+        )
+
+        let summary = PointsEngine.ledgerSummaries(
+            weekEnding: weekEnding,
+            memberIDs: [child.id],
+            entries: [entry],
+            rules: [purchase],
+            calendar: calendar
+        ).first
+
+        XCTAssertEqual(summary?.kind, .purchase)
+        XCTAssertEqual(summary?.weeklyCount, 1)
+        XCTAssertEqual(summary?.weeklyPoints, -500)
+        XCTAssertEqual(summary?.pendingCount, 1)
+        XCTAssertEqual(summary?.pendingEntryIDs, [entry.id])
+    }
+
+    func testLedgerReviewSelectionSupportsOneAggregateOrAllPendingThisWeek() {
+        let child = FamilyMember(name: "Child", role: .child)
+        let sibling = FamilyMember(name: "Sibling", role: .child)
+        let currentWeek = date(2026, 11, 7)
+        let selectedPending = LedgerEntry(
+            memberID: child.id,
+            weekEnding: currentWeek,
+            title: "Helping",
+            points: 100,
+            kind: .reward,
+            status: .pending,
+            submittedBy: "Child"
+        )
+        let otherPending = LedgerEntry(
+            memberID: sibling.id,
+            weekEnding: currentWeek,
+            title: "Chores",
+            points: 75,
+            kind: .reward,
+            status: .pending,
+            submittedBy: "Sibling"
+        )
+        let approved = LedgerEntry(
+            memberID: child.id,
+            weekEnding: currentWeek,
+            title: "Approved",
+            points: 50,
+            kind: .reward,
+            status: .approved,
+            submittedBy: "Parent"
+        )
+        let previousWeek = LedgerEntry(
+            memberID: child.id,
+            weekEnding: date(2026, 10, 31),
+            title: "Previous",
+            points: 25,
+            kind: .reward,
+            status: .pending,
+            submittedBy: "Child"
+        )
+        let outsider = LedgerEntry(
+            memberID: UUID(),
+            weekEnding: currentWeek,
+            title: "Other family",
+            points: 25,
+            kind: .reward,
+            status: .pending,
+            submittedBy: "Child"
+        )
+        let entries = [selectedPending, otherPending, approved, previousWeek, outsider]
+        let memberIDs = Set([child.id, sibling.id])
+
+        let selected = PointsEngine.pendingEntriesForReview(
+            weekEnding: currentWeek,
+            memberIDs: memberIDs,
+            entries: entries,
+            matchingEntryIDs: [selectedPending.id],
+            calendar: calendar
+        )
+        let all = PointsEngine.pendingEntriesForReview(
+            weekEnding: currentWeek,
+            memberIDs: memberIDs,
+            entries: entries,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(selected.map(\.id), [selectedPending.id])
+        XCTAssertEqual(Set(all.map(\.id)), Set([selectedPending.id, otherPending.id]))
+
+        let reviewedAt = date(2026, 11, 6)
+        XCTAssertEqual(
+            PointsEngine.applyReview(
+                to: selected,
+                status: .approved,
+                reviewedBy: "Parent",
+                reviewedAt: reviewedAt
+            ),
+            1
+        )
+        XCTAssertEqual(selectedPending.status, .approved)
+        XCTAssertEqual(selectedPending.reviewedBy, "Parent")
+        XCTAssertEqual(selectedPending.reviewedAt, reviewedAt)
+        XCTAssertEqual(otherPending.status, .pending)
+
+        let remaining = PointsEngine.pendingEntriesForReview(
+            weekEnding: currentWeek,
+            memberIDs: memberIDs,
+            entries: entries,
+            calendar: calendar
+        )
+        XCTAssertEqual(PointsEngine.applyReview(to: remaining, status: .rejected, reviewedBy: "Parent"), 1)
+        XCTAssertEqual(otherPending.status, .rejected)
+        XCTAssertEqual(approved.status, .approved)
+        XCTAssertEqual(previousWeek.status, .pending)
+        XCTAssertEqual(outsider.status, .pending)
+    }
+
+    func testPendingPointTotalsAreSeparatedByMemberAndWeek() {
+        let child = FamilyMember(name: "Child", role: .child)
+        let sibling = FamilyMember(name: "Sibling", role: .child)
+        let currentWeek = date(2026, 11, 7)
+        let entries = [
+            LedgerEntry(
+                memberID: child.id,
+                weekEnding: currentWeek,
+                title: "Helping",
+                points: 125,
+                kind: .reward,
+                status: .pending,
+                submittedBy: "Child"
+            ),
+            LedgerEntry(
+                memberID: child.id,
+                weekEnding: currentWeek,
+                title: "Shouting",
+                points: -50,
+                kind: .penalty,
+                status: .pending,
+                submittedBy: "Caregiver"
+            ),
+            LedgerEntry(
+                memberID: child.id,
+                weekEnding: currentWeek,
+                title: "Approved",
+                points: 500,
+                kind: .reward,
+                status: .approved,
+                submittedBy: "Parent"
+            ),
+            LedgerEntry(
+                memberID: child.id,
+                weekEnding: currentWeek,
+                title: "Rejected",
+                points: -400,
+                kind: .penalty,
+                status: .rejected,
+                submittedBy: "Parent"
+            ),
+            LedgerEntry(
+                memberID: child.id,
+                weekEnding: date(2026, 10, 31),
+                title: "Previous week",
+                points: 300,
+                kind: .reward,
+                status: .pending,
+                submittedBy: "Child"
+            ),
+            LedgerEntry(
+                memberID: sibling.id,
+                weekEnding: currentWeek,
+                title: "Sibling entry",
+                points: 200,
+                kind: .reward,
+                status: .pending,
+                submittedBy: "Sibling"
+            )
+        ]
+
+        let totals = PointsEngine.pendingPointTotals(
+            for: child.id,
+            weekEnding: currentWeek,
+            entries: entries,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(totals.count, 2)
+        XCTAssertEqual(totals.earned, 125)
+        XCTAssertEqual(totals.lost, 50)
+        XCTAssertEqual(totals.net, 75)
+    }
+
     private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
         calendar.date(from: DateComponents(year: year, month: month, day: day))!
     }
@@ -489,6 +780,25 @@ final class PointsEngineTests: XCTestCase {
             minimumTarget: minimum,
             deductStartingPointsWhenMinimumMissed: deductWhenMissed,
             minimumPeriod: period
+        )
+    }
+
+    private func ledgerEntry(
+        child: FamilyMember,
+        rule: RuleTemplate,
+        week: Date,
+        points: Int,
+        status: ApprovalStatus
+    ) -> LedgerEntry {
+        LedgerEntry(
+            memberID: child.id,
+            ruleID: rule.id,
+            weekEnding: week,
+            title: rule.title,
+            points: points,
+            kind: rule.kind,
+            status: status,
+            submittedBy: "Parent"
         )
     }
 }
@@ -563,6 +873,29 @@ final class ActivitySubmissionPolicyTests: XCTestCase {
         XCTAssertFalse(ActivitySubmissionPolicy.isChildAccountHolder(
             member: nil,
             membershipRole: .parent
+        ))
+    }
+
+    func testCaregiverSubmissionsAreRecommendationsRequiringParentApproval() {
+        let caregiver = FamilyMember(
+            name: "Caregiver",
+            birthDate: date(1980, 1, 1),
+            role: .caregiver
+        )
+
+        let kind = ActivitySubmissionPolicy.submissionKind(
+            member: caregiver,
+            membershipRole: .caregiver,
+            on: date(2026, 11, 6),
+            calendar: gregorianUTC
+        )
+
+        XCTAssertEqual(kind, .caregiverRecommendation)
+        XCTAssertTrue(kind.requiresParentApproval)
+        XCTAssertEqual(kind.submittedBy, "Caregiver")
+        XCTAssertFalse(ActivitySubmissionPolicy.isChildAccountHolder(
+            member: caregiver,
+            membershipRole: .caregiver
         ))
     }
 

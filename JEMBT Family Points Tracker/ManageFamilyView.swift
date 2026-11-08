@@ -24,9 +24,16 @@ struct ManageFamilyView: View {
     @State private var inviteToPresentAfterAdd: PendingInviteShare?
     @State private var pendingInviteShare: PendingInviteShare?
     @State private var errorMessage: String?
+    @State private var selectedWeekEnding = PointsEngine.weekEnding(containing: .now)
+    @State private var showingReportingPeriodPicker = false
+    @State private var quickActivity: QuickActivityRequest?
 
     private var canEdit: Bool {
         appleIDManager.currentMembership?.role.canAdministerFamily == true
+    }
+
+    private var canChooseReportingPeriod: Bool {
+        appleIDManager.currentMembership?.role.canManageRules == true
     }
 
     private var familyMembers: [FamilyMember] {
@@ -41,7 +48,7 @@ struct ManageFamilyView: View {
     }
 
     private var weekEnding: Date {
-        PointsEngine.weekEnding(containing: .now)
+        selectedWeekEnding
     }
 
     private var familyEntries: [LedgerEntry] {
@@ -61,7 +68,10 @@ struct ManageFamilyView: View {
     }
 
     private var pendingApprovalCount: Int {
-        familyEntries.count { $0.status == .pending }
+        familyEntries.count {
+            $0.status == .pending &&
+            Calendar.current.isDate($0.weekEnding, inSameDayAs: weekEnding)
+        }
     }
 
     var body: some View {
@@ -83,33 +93,18 @@ struct ManageFamilyView: View {
                 }
             }
 
-            Section("Week ending \(weekEnding.formatted(date: .abbreviated, time: .omitted))") {
-                if weeklyStandings.isEmpty {
-                    Text("Add a child to begin tracking weekly points.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(weeklyStandings) { standing in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text(standing.child.name)
-                                    .font(.headline)
-                                Spacer()
-                                Text("\(standing.finalPoints) pts")
-                                    .font(.title3.bold())
-                            }
-                            Text("Base \(standing.startingPoints)  •  Debt \(standing.debtCarriedIn)  •  Entries \(standing.approvedEntryPoints)  •  Parent pot +\(standing.parentPotShare)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+            Section("Pending approval") {
+                NavigationLink {
+                    WeeklyLedgerView(weekEnding: weekEnding)
+                } label: {
+                    LabeledContent("View weekly ledger") {
+                        Text(pendingApprovalCount == 0
+                             ? "No pending submissions"
+                             : "\(pendingApprovalCount) waiting")
+                            .foregroundStyle(pendingApprovalCount == 0 ? Color.secondary : Color.orange)
                     }
                 }
-            }
-
-            Section("Pending approval") {
-                Text(pendingApprovalCount == 0
-                     ? "No pending submissions"
-                     : "\(pendingApprovalCount) item\(pendingApprovalCount == 1 ? "" : "s") waiting")
-                    .foregroundStyle(pendingApprovalCount == 0 ? .secondary : .primary)
+                .accessibilityIdentifier("weeklyLedgerLink")
             }
 
             if familyMembers.isEmpty {
@@ -129,6 +124,16 @@ struct ManageFamilyView: View {
         .navigationTitle(displayedFamilyName)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
+            if canChooseReportingPeriod {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showingReportingPeriodPicker = true
+                    } label: {
+                        Image(systemName: "calendar")
+                    }
+                    .accessibilityLabel("Reporting period ending \(weekEnding.formatted(date: .abbreviated, time: .omitted))")
+                }
+            }
             if canEdit {
                 ToolbarItemGroup(placement: .primaryAction) {
                     familyNameEditButton
@@ -147,6 +152,30 @@ struct ManageFamilyView: View {
                     try saveFamilyName(newName, for: family)
                 }
             }
+        }
+        .sheet(isPresented: $showingReportingPeriodPicker) {
+            NavigationStack {
+                Form {
+                    DatePicker(
+                        "Week ending",
+                        selection: Binding(
+                            get: { selectedWeekEnding },
+                            set: { selectedWeekEnding = PointsEngine.weekEnding(containing: $0) }
+                        ),
+                        displayedComponents: .date
+                    )
+                }
+                .navigationTitle("Reporting Period")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingReportingPeriodPicker = false }
+                    }
+                }
+            }
+        }
+        .sheet(item: $quickActivity) { request in
+            QuickActivityView(member: request.member, kind: request.kind, weekEnding: request.weekEnding)
         }
         .sheet(isPresented: $showingAddMember, onDismiss: presentPendingInvite) {
             MemberEditorView(title: "Add Family Member") { draft in
@@ -194,9 +223,16 @@ struct ManageFamilyView: View {
                 ForEach(roleMembers) { member in
                     MemberAdministrationRow(
                         member: member,
+                        points: member.role.participatesInPoints ? pointsSummary(for: member) : nil,
                         invitation: pendingInvitation(for: member),
                         canEdit: canEdit,
                         isCurrentMember: member.id == appleIDManager.currentFamilyMember?.id,
+                        onReward: member.role == .child
+                            ? { quickActivity = QuickActivityRequest(member: member, kind: .reward, weekEnding: weekEnding) }
+                            : nil,
+                        onPenalty: member.role.participatesInPoints
+                            ? { quickActivity = QuickActivityRequest(member: member, kind: .penalty, weekEnding: weekEnding) }
+                            : nil,
                         onGenerateCode: { generateCode(for: member) },
                         onEdit: { editingMember = member }
                     )
@@ -210,6 +246,38 @@ struct ManageFamilyView: View {
                 }
             }
         }
+    }
+
+    private func pointsSummary(for member: FamilyMember) -> MemberPointsSummary {
+        let approvedEntries = familyEntries.filter {
+            $0.memberID == member.id &&
+            $0.status == .approved &&
+            Calendar.current.isDate($0.weekEnding, inSameDayAs: weekEnding)
+        }
+        let earned = approvedEntries.reduce(0) { $0 + max(0, $1.points) }
+        let lost = approvedEntries.reduce(0) { $0 + abs(min(0, $1.points)) }
+        let draft = weeklyStandings.first { $0.child.id == member.id }
+        let confirmed = settlements.first {
+            $0.childID == member.id &&
+            Calendar.current.isDate($0.weekEnding, inSameDayAs: weekEnding)
+        }
+        let pending = PointsEngine.pendingPointTotals(
+            for: member.id,
+            weekEnding: weekEnding,
+            entries: familyEntries
+        )
+
+        return MemberPointsSummary(
+            balance: confirmed?.finalPoints ?? draft?.finalPoints,
+            base: confirmed?.startingPoints ?? draft?.startingPoints,
+            earned: earned,
+            lost: lost,
+            pendingCount: pending.count,
+            pendingEarned: pending.earned,
+            pendingLost: pending.lost,
+            debt: confirmed?.debtCarriedIn ?? draft?.debtCarriedIn ?? 0,
+            parentPotShare: confirmed?.parentPotShare ?? draft?.parentPotShare ?? 0
+        )
     }
 
     private var displayedFamilyName: String {
@@ -414,11 +482,28 @@ private struct InviteShareSheet: View {
     }
 }
 
+private struct MemberPointsSummary {
+    let balance: Int?
+    let base: Int?
+    let earned: Int
+    let lost: Int
+    let pendingCount: Int
+    let pendingEarned: Int
+    let pendingLost: Int
+    let debt: Int
+    let parentPotShare: Int
+
+    var net: Int { earned - lost }
+}
+
 private struct MemberAdministrationRow: View {
     let member: FamilyMember
+    let points: MemberPointsSummary?
     let invitation: FamilyInvitation?
     let canEdit: Bool
     let isCurrentMember: Bool
+    let onReward: (() -> Void)?
+    let onPenalty: (() -> Void)?
     let onGenerateCode: () -> Void
     let onEdit: () -> Void
 
@@ -428,16 +513,12 @@ private struct MemberAdministrationRow: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(memberDisplayName)
                         .font(.headline)
-                    Text(member.role.title)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if member.role == .child {
-                        Text("Current default: \(currentDefaultPoints.formatted()) points")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
                 }
                 Spacer()
+                if let points {
+                    Text("\((points.balance ?? points.net).formatted()) pts")
+                        .font(.title3.bold())
+                }
                 if !member.isActive {
                     Text("Inactive")
                         .font(.caption.bold())
@@ -448,6 +529,59 @@ private struct MemberAdministrationRow: View {
                         Image(systemName: "ellipsis.circle")
                     }
                     .accessibilityLabel("Edit \(member.name)")
+                }
+            }
+
+            if let points {
+                if let base = points.base {
+                    Text("Base \(base.formatted())  •  Earned +\(points.earned.formatted())  •  Lost -\(points.lost.formatted())")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("pointsSummary-\(member.name)")
+                    if points.debt != 0 || points.parentPotShare != 0 {
+                        Text("Debt \(points.debt.formatted())  •  Parent pot +\(points.parentPotShare.formatted())")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("Earned +\(points.earned.formatted())  •  Lost -\(points.lost.formatted())")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("pointsSummary-\(member.name)")
+                }
+
+                if points.pendingCount > 0 {
+                    Label {
+                        Text("Waiting approval: +\(points.pendingEarned.formatted()) earned  •  -\(points.pendingLost.formatted()) lost")
+                    } icon: {
+                        Image(systemName: "clock.fill")
+                    }
+                    .font(.caption.bold())
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("pendingPoints-\(member.name)")
+                }
+
+                HStack(spacing: 12) {
+                    if let onReward {
+                        Button(action: onReward) {
+                            Text(EntryKind.reward.activityEmoji)
+                                .font(.title2)
+                                .frame(width: 40, height: 36)
+                                .background(.green.opacity(0.14), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Reward \(member.name)")
+                    }
+                    if let onPenalty {
+                        Button(action: onPenalty) {
+                            Text(EntryKind.penalty.activityEmoji)
+                                .font(.title2)
+                                .frame(width: 40, height: 36)
+                                .background(.indigo.opacity(0.14), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Penalize \(member.name)")
+                    }
                 }
             }
 
@@ -494,13 +628,6 @@ private struct MemberAdministrationRow: View {
         return name
     }
 
-    private var currentDefaultPoints: Int {
-        PointsEngine.startingPoints(
-            for: member,
-            weekEnding: PointsEngine.weekEnding(containing: .now)
-        )
-    }
-
     private var invitationSubject: String {
         "You're invited to join our allowance family"
     }
@@ -533,6 +660,490 @@ private struct MemberAdministrationRow: View {
         lines.append("")
         lines.append("Open the allowance app, sign in, choose to join a family, and enter the invitation code above.")
         return lines.joined(separator: "\n")
+    }
+}
+
+private struct QuickActivityRequest: Identifiable {
+    let member: FamilyMember
+    let kind: EntryKind
+    let weekEnding: Date
+
+    var id: String { "\(member.id.uuidString)-\(kind.rawValue)" }
+}
+
+private struct QuickActivityView: View {
+    let member: FamilyMember
+    let kind: EntryKind
+    let weekEnding: Date
+
+    @Environment(AppleIDManager.self) private var appleIDManager
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \RuleTemplate.title) private var allRules: [RuleTemplate]
+    @Query private var entries: [LedgerEntry]
+    @State private var selectedRuleID: UUID?
+    @State private var points = 0
+    @State private var notes = ""
+    @State private var errorMessage: String?
+
+    private var catalog: RuleCatalog { kind == .reward ? .incentives : .disincentives }
+
+    private var rules: [RuleTemplate] {
+        allRules.filter {
+            $0.familyID == appleIDManager.currentFamily?.id &&
+            $0.isEnabled &&
+            $0.catalog == catalog
+        }
+    }
+
+    private var selectedRule: RuleTemplate? {
+        rules.first { $0.id == selectedRuleID }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(kind == .reward ? "Choose an award" : "Choose a penalty") {
+                    ForEach(rules) { rule in
+                        Button {
+                            select(rule)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: rule.iconName)
+                                    .foregroundStyle(kind == .reward ? .green : .indigo)
+                                    .frame(width: 28)
+                                Text(rule.title)
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                if selectedRuleID == rule.id {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.tint)
+                                }
+                            }
+                        }
+                        .accessibilityIdentifier("quickRule-\(rule.title)")
+                    }
+                }
+
+                if let selectedRule {
+                    Section("This entry") {
+                        LabeledContent("Points") {
+                            HStack(spacing: 8) {
+                                TextField("Points", value: $points, format: .number)
+                                    .keyboardType(.numbersAndPunctuation)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 90)
+                                    .accessibilityIdentifier("quickActivityPoints")
+                                Stepper("", value: $points, in: pointRange)
+                                    .labelsHidden()
+                            }
+                        }
+                        TextField("Notes (optional)", text: $notes, axis: .vertical)
+                            .lineLimit(2...5)
+                            .accessibilityIdentifier("quickActivityNotes")
+                        if !selectedRule.guidance.isEmpty {
+                            Text(selectedRule.guidance)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                if let errorMessage {
+                    Text(errorMessage).foregroundStyle(.red)
+                }
+            }
+            .navigationTitle("\(kind.activityEmoji) \(member.name)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save", action: save)
+                        .disabled(selectedRule == nil)
+                }
+            }
+        }
+    }
+
+    private var pointRange: ClosedRange<Int> {
+        kind == .reward ? 0...10_000 : -10_000...0
+    }
+
+    private func select(_ rule: RuleTemplate) {
+        selectedRuleID = rule.id
+        let existingQuantity = entries
+            .filter {
+                $0.memberID == member.id &&
+                $0.ruleID == rule.id &&
+                $0.status != .rejected &&
+                Calendar.current.isDate($0.weekEnding, inSameDayAs: weekEnding)
+            }
+            .reduce(0.0) { $0 + max(0, $1.quantity) }
+        points = min(max(rule.incrementalPoints(existingQuantity: existingQuantity), pointRange.lowerBound), pointRange.upperBound)
+        errorMessage = nil
+    }
+
+    private func save() {
+        guard let rule = selectedRule else { return }
+        let submissionKind = ActivitySubmissionPolicy.submissionKind(
+            member: appleIDManager.currentFamilyMember,
+            membershipRole: appleIDManager.currentMembership?.role
+        )
+        modelContext.insert(
+            LedgerEntry(
+                memberID: member.id,
+                ruleID: rule.id,
+                occurredAt: Calendar.current.isDate(
+                    weekEnding,
+                    inSameDayAs: PointsEngine.weekEnding(containing: .now)
+                ) ? .now : weekEnding,
+                weekEnding: weekEnding,
+                title: rule.title,
+                notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
+                points: points,
+                kind: kind,
+                status: submissionKind.requiresParentApproval ? .pending : .approved,
+                submittedBy: submissionKind.submittedBy,
+                reviewedBy: submissionKind.requiresParentApproval ? nil : "Parent",
+                reviewedAt: submissionKind.requiresParentApproval ? nil : .now,
+                quantity: rule.singleAwardQuantity,
+                measurementUnit: rule.measurementUnit
+            )
+        )
+        do {
+            try modelContext.save()
+            dismiss()
+        } catch {
+            errorMessage = "The entry could not be saved: \(error.localizedDescription)"
+        }
+    }
+}
+
+struct WeeklyLedgerView: View {
+    let weekEnding: Date
+
+    @Environment(AppleIDManager.self) private var appleIDManager
+    @Environment(\.modelContext) private var modelContext
+    @Query private var members: [FamilyMember]
+    @Query private var entries: [LedgerEntry]
+    @Query private var rules: [RuleTemplate]
+    @State private var reviewErrorMessage: String?
+
+    private var canReview: Bool {
+        appleIDManager.currentMembership?.role.canReviewLedger == true
+    }
+
+    private var familyMembers: [FamilyMember] {
+        members.filter {
+            $0.familyID == appleIDManager.currentFamily?.id && $0.role.participatesInPoints
+        }
+    }
+
+    private var summaries: [LedgerSummary] {
+        PointsEngine.ledgerSummaries(
+            weekEnding: weekEnding,
+            memberIDs: Set(familyMembers.map(\.id)),
+            entries: entries,
+            rules: rules.filter { $0.familyID == appleIDManager.currentFamily?.id }
+        )
+    }
+
+    private var sortedMembers: [FamilyMember] {
+        familyMembers.sorted(by: FamilyMember.comesBeforeInFamilyList)
+    }
+
+    private var hasRows: Bool {
+        sortedMembers.contains { $0.role == .child } || !summaries.isEmpty
+    }
+
+    private var pendingEntriesForWeek: [LedgerEntry] {
+        PointsEngine.pendingEntriesForReview(
+            weekEnding: weekEnding,
+            memberIDs: Set(familyMembers.map(\.id)),
+            entries: entries
+        )
+    }
+
+    var body: some View {
+        Group {
+            if !hasRows {
+                ContentUnavailableView(
+                    "No Activity",
+                    systemImage: "list.bullet.clipboard",
+                    description: Text("No rewards or penalties were recorded for this week.")
+                )
+            } else {
+                ScrollView([.horizontal, .vertical]) {
+                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        Section {
+                            ForEach(sortedMembers) { member in
+                                if member.role == .child {
+                                    WeeklyLedgerStartingRow(
+                                        memberName: member.name,
+                                        points: PointsEngine.startingPoints(for: member, weekEnding: weekEnding)
+                                    )
+                                }
+                                ForEach(summaries.filter { $0.memberID == member.id }) { summary in
+                                    WeeklyLedgerRow(
+                                        summary: summary,
+                                        memberName: member.name,
+                                        canReview: canReview,
+                                        onApproveItem: { review(summary, as: .approved) },
+                                        onRejectItem: { review(summary, as: .rejected) },
+                                        onApproveAll: { reviewAll(as: .approved) },
+                                        onRejectAll: { reviewAll(as: .rejected) }
+                                    )
+                                }
+                            }
+                        } header: {
+                            WeeklyLedgerHeader()
+                        }
+                    }
+                    .frame(minWidth: WeeklyLedgerColumns.tableWidth, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 12)
+                }
+            }
+        }
+        .navigationTitle("Weekly Ledger")
+        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .top) {
+            VStack(spacing: 4) {
+                Text("Week ending \(weekEnding.formatted(date: .abbreviated, time: .omitted))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let reviewErrorMessage {
+                    Text(reviewErrorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+            .background(.bar)
+        }
+    }
+
+    private func review(_ summary: LedgerSummary, as status: ApprovalStatus) {
+        review(
+            PointsEngine.pendingEntriesForReview(
+                weekEnding: weekEnding,
+                memberIDs: Set(familyMembers.map(\.id)),
+                entries: entries,
+                matchingEntryIDs: Set(summary.pendingEntryIDs)
+            ),
+            as: status
+        )
+    }
+
+    private func reviewAll(as status: ApprovalStatus) {
+        review(pendingEntriesForWeek, as: status)
+    }
+
+    private func review(_ pendingEntries: [LedgerEntry], as status: ApprovalStatus) {
+        guard canReview, !pendingEntries.isEmpty else { return }
+        let reviewer = appleIDManager.currentFamilyMember?.name ?? "Parent"
+        let reviewedAt = Date.now
+        PointsEngine.applyReview(
+            to: pendingEntries,
+            status: status,
+            reviewedBy: reviewer,
+            reviewedAt: reviewedAt
+        )
+        do {
+            try modelContext.save()
+            reviewErrorMessage = nil
+        } catch {
+            modelContext.rollback()
+            reviewErrorMessage = "The review could not be saved: \(error.localizedDescription)"
+        }
+    }
+}
+
+private enum WeeklyLedgerColumns {
+    static let type: CGFloat = 34
+    static let item: CGFloat = 150
+    static let person: CGFloat = 100
+    static let count: CGFloat = 42
+    static let recordCount: CGFloat = 56
+    static let points: CGFloat = 72
+    static let recordPoints: CGFloat = 78
+    static let next: CGFloat = 64
+    static let status: CGFloat = 150
+    static let review: CGFloat = 150
+    static let spacing: CGFloat = 8
+    static let tableWidth = type + item + person + count + recordCount + points + recordPoints + next + status + review + spacing * 9
+}
+
+private struct WeeklyLedgerHeader: View {
+    var body: some View {
+        HStack(spacing: WeeklyLedgerColumns.spacing) {
+            Text("Type").frame(width: WeeklyLedgerColumns.type)
+            Text("Item").frame(width: WeeklyLedgerColumns.item, alignment: .leading)
+            Text("Status").frame(width: WeeklyLedgerColumns.status, alignment: .leading)
+            Text("Review").frame(width: WeeklyLedgerColumns.review)
+            Text("Person").frame(width: WeeklyLedgerColumns.person, alignment: .leading)
+            Text("#").frame(width: WeeklyLedgerColumns.count, alignment: .trailing)
+            Text("Max #").frame(width: WeeklyLedgerColumns.recordCount, alignment: .trailing)
+            Text("Week").frame(width: WeeklyLedgerColumns.points, alignment: .trailing)
+            Text("Record").frame(width: WeeklyLedgerColumns.recordPoints, alignment: .trailing)
+            Text("Next").frame(width: WeeklyLedgerColumns.next, alignment: .trailing)
+        }
+        .font(.caption2.bold())
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 7)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+        .accessibilityIdentifier("weeklyLedgerHeader")
+    }
+}
+
+private struct WeeklyLedgerStartingRow: View {
+    let memberName: String
+    let points: Int
+
+    var body: some View {
+        HStack(spacing: WeeklyLedgerColumns.spacing) {
+            Image(systemName: "flag.checkered")
+                .foregroundStyle(.secondary)
+                .frame(width: WeeklyLedgerColumns.type)
+            Text("Starting value")
+                .fontWeight(.semibold)
+                .frame(width: WeeklyLedgerColumns.item, alignment: .leading)
+            Text("Approved")
+                .foregroundStyle(.green)
+                .frame(width: WeeklyLedgerColumns.status, alignment: .leading)
+            placeholder(width: WeeklyLedgerColumns.review)
+            Text(memberName).frame(width: WeeklyLedgerColumns.person, alignment: .leading)
+            placeholder(width: WeeklyLedgerColumns.count)
+            placeholder(width: WeeklyLedgerColumns.recordCount)
+            Text(signed(points)).frame(width: WeeklyLedgerColumns.points, alignment: .trailing)
+            placeholder(width: WeeklyLedgerColumns.recordPoints)
+            placeholder(width: WeeklyLedgerColumns.next)
+        }
+        .font(.caption)
+        .padding(.vertical, 6)
+        .overlay(alignment: .bottom) { Divider() }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("ledgerStartingValue-\(memberName)")
+    }
+
+    private func placeholder(width: CGFloat) -> some View {
+        Text("—").foregroundStyle(.tertiary).frame(width: width, alignment: .trailing)
+    }
+
+    private func signed(_ value: Int) -> String {
+        value > 0 ? "+\(value.formatted())" : value.formatted()
+    }
+}
+
+private struct WeeklyLedgerRow: View {
+    let summary: LedgerSummary
+    let memberName: String
+    let canReview: Bool
+    let onApproveItem: () -> Void
+    let onRejectItem: () -> Void
+    let onApproveAll: () -> Void
+    let onRejectAll: () -> Void
+
+    var body: some View {
+        HStack(spacing: WeeklyLedgerColumns.spacing) {
+            Text(summary.kind.activityEmoji)
+                .frame(width: WeeklyLedgerColumns.type)
+                .accessibilityHidden(true)
+            HStack(spacing: 5) {
+                Image(systemName: summary.hasPendingEntries ? "clock.fill" : summary.iconName)
+                    .foregroundStyle(summary.hasPendingEntries ? .orange : (summary.kind == .penalty ? .indigo : .green))
+                Text(summary.title)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+            }
+            .frame(width: WeeklyLedgerColumns.item, alignment: .leading)
+            Label(statusText, systemImage: statusIcon)
+                .lineLimit(1)
+                .foregroundStyle(statusColor)
+                .frame(width: WeeklyLedgerColumns.status, alignment: .leading)
+                .accessibilityIdentifier("ledgerStatus-\(memberName)-\(summary.title)")
+            if canReview && summary.hasPendingEntries {
+                HStack(spacing: 5) {
+                    Menu("Reject") {
+                        Button("This item", role: .destructive, action: onRejectItem)
+                        Button("All pending this week", role: .destructive, action: onRejectAll)
+                    }
+                    .accessibilityIdentifier("rejectLedger-\(memberName)-\(summary.title)")
+                    Menu("Approve") {
+                        Button("This item", action: onApproveItem)
+                        Button("All pending this week", action: onApproveAll)
+                    }
+                    .accessibilityIdentifier("approveLedger-\(memberName)-\(summary.title)")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .frame(width: WeeklyLedgerColumns.review)
+            } else {
+                Text("—")
+                    .foregroundStyle(.tertiary)
+                    .frame(width: WeeklyLedgerColumns.review)
+            }
+            Text(memberName)
+                .lineLimit(1)
+                .frame(width: WeeklyLedgerColumns.person, alignment: .leading)
+            Text(summary.weeklyCount.formatted())
+                .frame(width: WeeklyLedgerColumns.count, alignment: .trailing)
+            Text(summary.recordWeeklyCount.formatted())
+                .frame(width: WeeklyLedgerColumns.recordCount, alignment: .trailing)
+            Text(signed(summary.weeklyPoints))
+                .fontWeight(.semibold)
+                .frame(width: WeeklyLedgerColumns.points, alignment: .trailing)
+            Text(signed(summary.recordWeeklyPoints))
+                .frame(width: WeeklyLedgerColumns.recordPoints, alignment: .trailing)
+            Text(summary.nextPoints.map(signed) ?? "—")
+                .frame(width: WeeklyLedgerColumns.next, alignment: .trailing)
+        }
+        .font(.caption)
+        .padding(.vertical, 6)
+        .overlay(alignment: .bottom) { Divider() }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(summary.kind == .reward ? "Reward" : "Penalty"), \(summary.title), \(memberName), " +
+            "\(summary.weeklyCount) this week, \(signed(summary.weeklyPoints)) points, " +
+            "record \(summary.recordWeeklyCount) times and \(signed(summary.recordWeeklyPoints)) points, " +
+            "next \(summary.nextPoints.map(signed) ?? "not available")" +
+            ", \(statusText)"
+        )
+        .accessibilityIdentifier("ledgerSummary-\(memberName)-\(summary.title)")
+    }
+
+    private func signed(_ value: Int) -> String {
+        value > 0 ? "+\(value.formatted())" : value.formatted()
+    }
+
+    private var statusText: String {
+        if summary.pendingCount > 0 {
+            if summary.approvedCount > 0 {
+                return "\(summary.pendingCount) need action • \(summary.approvedCount) approved"
+            }
+            return "\(summary.pendingCount) need action"
+        }
+        if summary.approvedCount > 0 && summary.rejectedCount > 0 {
+            return "\(summary.approvedCount) approved • \(summary.rejectedCount) rejected"
+        }
+        if summary.approvedCount > 0 { return "Approved" }
+        return "Rejected"
+    }
+
+    private var statusIcon: String {
+        if summary.pendingCount > 0 { return "exclamationmark.circle.fill" }
+        if summary.approvedCount > 0 { return "checkmark.circle.fill" }
+        return "xmark.circle.fill"
+    }
+
+    private var statusColor: Color {
+        if summary.pendingCount > 0 { return .orange }
+        if summary.approvedCount > 0 { return .green }
+        return .red
     }
 }
 
@@ -607,9 +1218,6 @@ private struct MemberEditorView: View {
     @State private var draft: MemberDraft
     @State private var validationMessage: String?
     @FocusState private var focusedField: Field?
-#if canImport(UIKit)
-    @State private var inputFocusCoordinator = MemberInputFocusCoordinator()
-#endif
 #if canImport(ContactsUI) && canImport(UIKit)
     @State private var showingContactPicker = false
     @State private var contactImportMessage: String?
@@ -629,6 +1237,12 @@ private struct MemberEditorView: View {
         member: FamilyMember? = nil,
         onSave: @escaping (MemberDraft) throws -> Void
     ) {
+        #if DEBUG
+        let defaultRole = ProcessInfo.processInfo.environment["UITEST_DEFAULT_MEMBER_ROLE"]
+            .flatMap(MemberRole.init(rawValue:)) ?? .child
+        #else
+        let defaultRole = MemberRole.child
+        #endif
         self.title = title
         self.isAddingMember = member == nil
         self.onSave = onSave
@@ -637,7 +1251,7 @@ private struct MemberEditorView: View {
             emailAddress: member?.emailAddress ?? "",
             birthDate: member?.birthDate,
             sourceContactIdentifier: member?.sourceContactIdentifier,
-            role: member?.role ?? .child
+            role: member?.role ?? defaultRole
         ))
     }
 
@@ -666,33 +1280,6 @@ private struct MemberEditorView: View {
 #endif
 
                 Section {
-                    #if canImport(UIKit)
-                    MemberTextInputField(
-                        text: $draft.name,
-                        label: "Name",
-                        keyboardType: .default,
-                        autocapitalizationType: .words,
-                        autocorrectionType: .default,
-                        fieldID: "name",
-                        focusCoordinator: inputFocusCoordinator,
-                        onNext: { inputFocusCoordinator.focus("email") },
-                        onPrevious: {}
-                    )
-                    .frame(height: 32)
-
-                    MemberTextInputField(
-                        text: $draft.emailAddress,
-                        label: "Email address (optional)",
-                        keyboardType: .emailAddress,
-                        autocapitalizationType: .none,
-                        autocorrectionType: .no,
-                        fieldID: "email",
-                        focusCoordinator: inputFocusCoordinator,
-                        onNext: { inputFocusCoordinator.focus("role") },
-                        onPrevious: { inputFocusCoordinator.focus("name") }
-                    )
-                    .frame(height: 32)
-                    #else
                     TextField("Name", text: $draft.name)
                         .focused($focusedField, equals: .name)
                         .submitLabel(.next)
@@ -708,15 +1295,14 @@ private struct MemberEditorView: View {
                         .onSubmit {
                             focusedField = .role
                         }
-                    #endif
 
                     #if canImport(UIKit)
                     LabeledContent("Role") {
                         RoleInputField(
                             role: $draft.role,
-                            focusCoordinator: inputFocusCoordinator,
-                            onNext: { inputFocusCoordinator.focus("birthday") },
-                            onPrevious: { inputFocusCoordinator.focus("email") }
+                            isFocused: focusBinding(for: .role),
+                            onNext: { focusedField = .birthday },
+                            onPrevious: { focusedField = .emailAddress }
                         )
                         .frame(width: 180, height: 32)
                     }
@@ -725,16 +1311,13 @@ private struct MemberEditorView: View {
                         BirthdayInputField(
                             birthDate: $draft.birthDate,
                             defaultAge: draft.role == .child ? 10 : 30,
-                            focusCoordinator: inputFocusCoordinator,
+                            isFocused: focusBinding(for: .birthday),
                             onNext: {
-                                if draft.role != .child && draft.birthDate != nil {
-                                    inputFocusCoordinator.clearFocus()
-                                    focusedField = .removeBirthday
-                                } else {
-                                    inputFocusCoordinator.clearFocus()
-                                }
+                                focusedField = draft.role != .child && draft.birthDate != nil
+                                    ? .removeBirthday
+                                    : nil
                             },
-                            onPrevious: { inputFocusCoordinator.focus("role") }
+                            onPrevious: { focusedField = .role }
                         )
                         .frame(width: 180, height: 32)
                     }
@@ -796,11 +1379,7 @@ private struct MemberEditorView: View {
             .task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                #if canImport(UIKit)
-                inputFocusCoordinator.focus("name")
-                #else
                 focusedField = .name
-                #endif
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -854,7 +1433,7 @@ private struct MemberEditorView: View {
         contactImportMessage = draft.birthDate == nil
             ? "No full birthdate was available. Enter one for a child; it is optional for adults."
             : "Contact details imported. Review them and choose the member’s role before saving."
-        inputFocusCoordinator.focus("role")
+        focusedField = .role
     }
 #endif
 
@@ -863,12 +1442,12 @@ private struct MemberEditorView: View {
         draft.emailAddress = draft.emailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !draft.name.isEmpty else {
             validationMessage = "Enter a name."
-            focus(.name)
+            focusedField = .name
             return
         }
         guard draft.role != .child || draft.birthDate != nil else {
             validationMessage = "Enter a birthdate for a child profile."
-            focus(.birthday)
+            focusedField = .birthday
             return
         }
         do {
@@ -899,20 +1478,6 @@ private struct MemberEditorView: View {
         )
     }
 
-    private func focus(_ field: Field) {
-        #if canImport(UIKit)
-        switch field {
-        case .name: inputFocusCoordinator.focus("name")
-        case .emailAddress: inputFocusCoordinator.focus("email")
-        case .role: inputFocusCoordinator.focus("role")
-        case .birthday: inputFocusCoordinator.focus("birthday")
-        case .contacts, .removeBirthday: focusedField = field
-        }
-        #else
-        focusedField = field
-        #endif
-    }
-
     private var currentDefaultPoints: Int {
         PointsEngine.startingPoints(
             forBirthDate: draft.birthDate,
@@ -923,92 +1488,9 @@ private struct MemberEditorView: View {
 }
 
 #if canImport(UIKit)
-@MainActor
-private final class MemberInputFocusCoordinator {
-    private final class WeakField {
-        weak var value: UITextField?
-
-        init(_ value: UITextField) {
-            self.value = value
-        }
-    }
-
-    private var fields: [String: WeakField] = [:]
-
-    func register(_ textField: UITextField, as fieldID: String) {
-        fields[fieldID] = WeakField(textField)
-    }
-
-    func focus(_ fieldID: String) {
-        guard let textField = fields[fieldID]?.value else { return }
-        textField.becomeFirstResponder()
-    }
-
-    func clearFocus() {
-        fields.values.compactMap(\.value).first(where: \.isFirstResponder)?.resignFirstResponder()
-    }
-}
-
-private struct MemberTextInputField: UIViewRepresentable {
-    @Binding var text: String
-    let label: String
-    let keyboardType: UIKeyboardType
-    let autocapitalizationType: UITextAutocapitalizationType
-    let autocorrectionType: UITextAutocorrectionType
-    let fieldID: String
-    let focusCoordinator: MemberInputFocusCoordinator
-    let onNext: () -> Void
-    let onPrevious: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
-    }
-
-    func makeUIView(context: Context) -> TabNavigatingTextField {
-        let textField = TabNavigatingTextField()
-        textField.delegate = context.coordinator
-        textField.placeholder = label
-        textField.accessibilityLabel = label
-        textField.keyboardType = keyboardType
-        textField.autocapitalizationType = autocapitalizationType
-        textField.autocorrectionType = autocorrectionType
-        textField.returnKeyType = .next
-        textField.clearButtonMode = .whileEditing
-        textField.addTarget(context.coordinator, action: #selector(Coordinator.textChanged(_:)), for: .editingChanged)
-        focusCoordinator.register(textField, as: fieldID)
-        return textField
-    }
-
-    func updateUIView(_ textField: TabNavigatingTextField, context: Context) {
-        context.coordinator.parent = self
-        textField.onNext = onNext
-        textField.onPrevious = onPrevious
-        if textField.text != text {
-            textField.text = text
-        }
-    }
-
-    final class Coordinator: NSObject, UITextFieldDelegate {
-        var parent: MemberTextInputField
-
-        init(parent: MemberTextInputField) {
-            self.parent = parent
-        }
-
-        @objc func textChanged(_ textField: UITextField) {
-            parent.text = textField.text ?? ""
-        }
-
-        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-            parent.onNext()
-            return false
-        }
-    }
-}
-
 private struct RoleInputField: UIViewRepresentable {
     @Binding var role: MemberRole
-    let focusCoordinator: MemberInputFocusCoordinator
+    @Binding var isFocused: Bool
     let onNext: () -> Void
     let onPrevious: () -> Void
 
@@ -1024,7 +1506,6 @@ private struct RoleInputField: UIViewRepresentable {
         textField.textAlignment = .right
         textField.tintColor = .clear
         textField.accessibilityLabel = "Role"
-        focusCoordinator.register(textField, as: "role")
 
         let picker = UIPickerView()
         picker.dataSource = context.coordinator
@@ -1042,6 +1523,15 @@ private struct RoleInputField: UIViewRepresentable {
         textField.accessibilityValue = role.title
         if let index = roles.firstIndex(of: role) {
             context.coordinator.picker?.selectRow(index, inComponent: 0, animated: false)
+        }
+        synchronizeFocus(of: textField)
+    }
+
+    private func synchronizeFocus(of textField: UITextField) {
+        if isFocused, !textField.isFirstResponder, textField.window != nil {
+            DispatchQueue.main.async { textField.becomeFirstResponder() }
+        } else if !isFocused, textField.isFirstResponder {
+            textField.resignFirstResponder()
         }
     }
 
@@ -1063,6 +1553,8 @@ private struct RoleInputField: UIViewRepresentable {
         func pickerView(_ pickerView: UIPickerView, didSelectRow row: Int, inComponent component: Int) {
             parent.role = parent.roles[row]
         }
+        func textFieldDidBeginEditing(_ textField: UITextField) { parent.isFocused = true }
+        func textFieldDidEndEditing(_ textField: UITextField) { parent.isFocused = false }
         func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
             false
         }
@@ -1072,7 +1564,7 @@ private struct RoleInputField: UIViewRepresentable {
 private struct BirthdayInputField: UIViewRepresentable {
     @Binding var birthDate: Date?
     let defaultAge: Int
-    let focusCoordinator: MemberInputFocusCoordinator
+    @Binding var isFocused: Bool
     let onNext: () -> Void
     let onPrevious: () -> Void
 
@@ -1086,7 +1578,6 @@ private struct BirthdayInputField: UIViewRepresentable {
         textField.textAlignment = .right
         textField.tintColor = .clear
         textField.accessibilityLabel = "Birthdate"
-        focusCoordinator.register(textField, as: "birthday")
 
         let picker = UIDatePicker()
         picker.datePickerMode = .date
@@ -1117,6 +1608,16 @@ private struct BirthdayInputField: UIViewRepresentable {
         if let birthDate {
             context.coordinator.picker?.setDate(birthDate, animated: false)
         }
+        synchronizeFocus(of: textField, coordinator: context.coordinator)
+    }
+
+    private func synchronizeFocus(of textField: UITextField, coordinator: Coordinator) {
+        if isFocused, !textField.isFirstResponder, textField.window != nil {
+            coordinator.prepareDateIfNeeded()
+            DispatchQueue.main.async { textField.becomeFirstResponder() }
+        } else if !isFocused, textField.isFirstResponder {
+            textField.resignFirstResponder()
+        }
     }
 
     final class Coordinator: NSObject, UITextFieldDelegate {
@@ -1130,8 +1631,10 @@ private struct BirthdayInputField: UIViewRepresentable {
 
         func textFieldDidBeginEditing(_ textField: UITextField) {
             prepareDateIfNeeded()
+            parent.isFocused = true
         }
 
+        func textFieldDidEndEditing(_ textField: UITextField) { parent.isFocused = false }
         func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
             false
         }

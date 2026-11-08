@@ -62,6 +62,25 @@ final class RuleTemplateTests: XCTestCase {
         XCTAssertEqual(rule.calculatedPoints(quantity: 2, riderMultiplier: 4), -400)
     }
 
+    func testIncrementalPointsReturnsOnlyTheNextConfiguredAward() {
+        let growingPenalty = makeRule(
+            points: -50,
+            growthKind: .percentage,
+            growthAmount: 100
+        )
+        let timedReward = makeRule(
+            points: 100,
+            frequencyKind: .time,
+            frequencyValue: 15,
+            timeUnit: .minute
+        )
+
+        XCTAssertEqual(growingPenalty.incrementalPoints(existingQuantity: 0), -50)
+        XCTAssertEqual(growingPenalty.incrementalPoints(existingQuantity: 2), -200)
+        XCTAssertEqual(timedReward.singleAwardQuantity, 15)
+        XCTAssertEqual(timedReward.incrementalPoints(existingQuantity: 15), 100)
+    }
+
     func testEntryKindMapsToRequestedCatalog() {
         XCTAssertEqual(makeRule(points: 50, kind: .reward).catalog, .incentives)
         XCTAssertEqual(makeRule(points: -50, kind: .penalty).catalog, .disincentives)
@@ -75,6 +94,21 @@ final class RuleTemplateTests: XCTestCase {
         XCTAssertFalse(FamilyMembershipRole.caregiver.canManageRules)
         XCTAssertFalse(FamilyMembershipRole.child.canManageRules)
         XCTAssertFalse(FamilyMembershipRole.viewer.canManageRules)
+    }
+
+    func testOnlyParentRolesCanReviewLedger() {
+        XCTAssertTrue(FamilyMembershipRole.familyAdmin.canReviewLedger)
+        XCTAssertTrue(FamilyMembershipRole.owner.canReviewLedger)
+        XCTAssertTrue(FamilyMembershipRole.parent.canReviewLedger)
+        XCTAssertFalse(FamilyMembershipRole.caregiver.canReviewLedger)
+        XCTAssertFalse(FamilyMembershipRole.child.canReviewLedger)
+        XCTAssertFalse(FamilyMembershipRole.viewer.canReviewLedger)
+    }
+
+    func testCaregiverDoesNotParticipateInPoints() {
+        XCTAssertTrue(MemberRole.child.participatesInPoints)
+        XCTAssertTrue(MemberRole.parent.participatesInPoints)
+        XCTAssertFalse(MemberRole.caregiver.participatesInPoints)
     }
 
     private func makeRule(

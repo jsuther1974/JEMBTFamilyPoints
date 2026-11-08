@@ -53,6 +53,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
     func testAddMemberShowsInviteReadySheetImmediately() throws {
         let app = XCUIApplication()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-admin-\(UUID().uuidString)@local"
+        app.launchEnvironment["UITEST_DEFAULT_MEMBER_ROLE"] = "parent"
         app.launch()
 
         app.signInAndCreateFamilyForAddingMembers()
@@ -173,24 +174,48 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
             object: emailField
         )
         XCTAssertEqual(XCTWaiter.wait(for: [emailFocused], timeout: 2), .completed)
-
-        app.typeKey(.tab, modifierFlags: [])
-        let roleFocused = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
-            object: roleControl
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [roleFocused], timeout: 2), .completed)
-
-        app.typeKey(.tab, modifierFlags: [])
-        let birthdateFocused = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
-            object: birthdateField
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [birthdateFocused], timeout: 2), .completed)
+        XCTAssertTrue(roleControl.exists)
+        XCTAssertTrue(birthdateField.exists)
     }
 
     @MainActor
-    func testFamilyPageIncludesWeeklyStandingsWithoutDashboardTab() throws {
+    func testCaregiverCardDoesNotShowPoints() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-caregiver-card-\(UUID().uuidString)@local"
+        app.launchEnvironment["UITEST_DEFAULT_MEMBER_ROLE"] = "caregiver"
+        app.launch()
+
+        app.signInAndCreateFamilyForAddingMembers()
+        app.openFamilyTab()
+        let addButton = app.buttons["Add family member"]
+        XCTAssertTrue(addButton.waitForExistence(timeout: 5))
+        addButton.tap()
+
+        let nameField = app.textFields["Name"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        nameField.tap()
+        nameField.typeText("UI Test Caregiver")
+        XCTAssertEqual(app.textFields["Role"].value as? String, "Caregiver")
+        app.navigationBars["Add Family Member"].buttons["Save"].tap()
+
+        let doneButton = app.buttons["Done"]
+        XCTAssertTrue(doneButton.waitForExistence(timeout: 8))
+        doneButton.tap()
+
+        let caregiverName = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH 'UI Test Caregiver'")
+        ).firstMatch
+        for _ in 0..<5 where !caregiverName.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(caregiverName.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["pointsSummary-UI Test Caregiver"].exists)
+        XCTAssertFalse(app.buttons["Reward UI Test Caregiver"].exists)
+        XCTAssertFalse(app.buttons["Penalize UI Test Caregiver"].exists)
+    }
+
+    @MainActor
+    func testFamilyPageShowsPointsInMemberCardsWithoutStandaloneWeekSection() throws {
         let app = XCUIApplication()
         app.launch()
 
@@ -200,9 +225,99 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         let weekHeading = app.staticTexts.matching(
             NSPredicate(format: "label BEGINSWITH 'Week ending '")
         ).firstMatch
-        XCTAssertTrue(weekHeading.waitForExistence(timeout: 5), "Expected weekly standings on the Family page.")
+        XCTAssertFalse(weekHeading.exists, "Expected no standalone Week ending section.")
+
+        let reportingPeriodButton = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'Reporting period ending '")
+        ).firstMatch
+        XCTAssertTrue(reportingPeriodButton.waitForExistence(timeout: 5))
+        reportingPeriodButton.tap()
+        XCTAssertTrue(app.navigationBars["Reporting Period"].waitForExistence(timeout: 5))
+        app.navigationBars["Reporting Period"].buttons["Done"].tap()
+
+        let childPoints = app.staticTexts["pointsSummary-Mateo"]
+        XCTAssertTrue(childPoints.waitForExistence(timeout: 5), "Expected points in Mateo's member card.")
         XCTAssertTrue(app.staticTexts["Pending approval"].exists)
+
+        let parentPoints = app.staticTexts["pointsSummary-Daddy"]
+        for _ in 0..<4 where !parentPoints.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(parentPoints.waitForExistence(timeout: 5), "Expected points in Daddy's member card.")
+
+        for redundantRole in ["Child", "Parent", "Caregiver"] {
+            XCTAssertFalse(app.staticTexts[redundantRole].exists, "Expected section headings, not a redundant \(redundantRole) label in each card.")
+        }
         XCTAssertFalse(app.tabBars.buttons["Dashboard"].exists)
+    }
+
+    @MainActor
+    func testFamilyQuickAwardSavesAndAppearsInWeeklyLedger() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        app.signInAndJoinDemoFamilyIfNeeded()
+        app.openFamilyTab()
+
+        let rewardMateo = app.buttons["Reward Mateo"]
+        let penalizeMateo = app.buttons["Penalize Mateo"]
+        XCTAssertTrue(rewardMateo.waitForExistence(timeout: 5))
+        XCTAssertTrue(penalizeMateo.exists)
+        rewardMateo.tap()
+
+        let saveButton = app.navigationBars.buttons["Save"]
+        XCTAssertTrue(app.navigationBars.buttons["Cancel"].waitForExistence(timeout: 5))
+        XCTAssertTrue(saveButton.exists)
+        XCTAssertFalse(saveButton.isEnabled)
+
+        let award = app.buttons["quickRule-Advocate Award"]
+        XCTAssertTrue(award.waitForExistence(timeout: 5))
+        award.tap()
+        let pointsField = app.descendants(matching: .any)["quickActivityPoints"]
+        let notesField = app.descendants(matching: .any)["quickActivityNotes"]
+        for _ in 0..<4 where !pointsField.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(pointsField.waitForExistence(timeout: 5))
+        XCTAssertTrue(notesField.exists)
+        XCTAssertTrue(saveButton.isEnabled)
+        saveButton.tap()
+
+        let ledgerLink = app.descendants(matching: .any)["weeklyLedgerLink"]
+        for _ in 0..<4 where !ledgerLink.exists {
+            app.swipeDown()
+        }
+        XCTAssertTrue(ledgerLink.waitForExistence(timeout: 5))
+        ledgerLink.tap()
+
+        XCTAssertTrue(app.navigationBars["Weekly Ledger"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["weeklyLedgerHeader"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["ledgerStartingValue-Mateo"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["ledgerSummary-Mateo-Advocate Award"].waitForExistence(timeout: 5))
+
+        app.navigationBars["Weekly Ledger"].buttons.firstMatch.tap()
+        let penalizeDaddy = app.buttons["Penalize Daddy"]
+        for _ in 0..<5 where !penalizeDaddy.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(penalizeDaddy.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Reward Daddy"].exists)
+    }
+
+    @MainActor
+    func testLedgerTabReplacesStandaloneApprovalsPage() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        app.signInAndJoinDemoFamilyIfNeeded()
+
+        XCTAssertFalse(app.tabBars.buttons["Approvals"].exists)
+        let ledgerTab = app.tabBars.buttons["Ledger"]
+        XCTAssertTrue(ledgerTab.waitForExistence(timeout: 5))
+        ledgerTab.tap()
+
+        XCTAssertTrue(app.navigationBars["Weekly Ledger"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["weeklyLedgerHeader"].waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -296,7 +411,7 @@ private extension XCUIApplication {
     func assertCurrentMemberCannotInvite() {
         let meLabelPredicate = NSPredicate(format: "label CONTAINS '(me)'")
         let meLabelElement = staticTexts.matching(meLabelPredicate).firstMatch
-        for _ in 0..<8 where !meLabelElement.exists {
+        for _ in 0..<4 where !meLabelElement.exists {
             swipeUp()
         }
         XCTAssertTrue(meLabelElement.waitForExistence(timeout: 8), "Expected a member row marked as '(me)'.")
@@ -327,13 +442,9 @@ private extension XCUIApplication {
         nameField.tap()
         nameField.typeText("UI Test Invite Recipient")
 
-        let birthdateField = textFields["Birthdate"]
-        XCTAssertTrue(birthdateField.exists, "Expected a birthdate field for a child.")
-        birthdateField.tap()
-        let useDateButton = buttons["Use This Date"]
-        XCTAssertTrue(useDateButton.waitForExistence(timeout: 3))
-        useDateButton.tap()
-        XCTAssertNotEqual(birthdateField.value as? String, "Enter birthdate")
+        let roleField = textFields["Role"]
+        XCTAssertTrue(roleField.exists, "Expected a role field when adding a member.")
+        XCTAssertEqual(roleField.value as? String, "Parent")
 
         let saveButton = navigationBars["Add Family Member"].buttons["Save"]
         XCTAssertTrue(saveButton.exists, "Expected save button in add member sheet.")

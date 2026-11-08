@@ -12,6 +12,15 @@ enum EntryKind: String, Codable, CaseIterable {
     case penalty
     case purchase
     case adjustment
+
+    var activityEmoji: String {
+        switch self {
+        case .reward: "🎉"
+        case .penalty: "🌧️"
+        case .purchase: "🎁"
+        case .adjustment: "⚖️"
+        }
+    }
 }
 
 enum ApprovalStatus: String, Codable, CaseIterable {
@@ -280,6 +289,10 @@ final class RuleTemplate {
         max(1, (maximumTarget ?? 1_000) * max(1, frequencyValue))
     }
 
+    var singleAwardQuantity: Double {
+        frequencyKind == .count && countSchedule == .once ? 1 : max(1, frequencyValue)
+    }
+
     func awardCount(for quantity: Double) -> Int {
         guard quantity > 0 else { return 0 }
         if frequencyKind == .count && countSchedule == .once { return 1 }
@@ -374,6 +387,13 @@ final class RuleTemplate {
             }
         }
         return Int((total * max(0, riderMultiplier)).rounded())
+    }
+
+    func incrementalPoints(existingQuantity: Double, additionalQuantity: Double? = nil) -> Int {
+        let existingQuantity = max(0, existingQuantity)
+        let additionalQuantity = max(0, additionalQuantity ?? singleAwardQuantity)
+        return calculatedPoints(quantity: existingQuantity + additionalQuantity) -
+            calculatedPoints(quantity: existingQuantity)
     }
 }
 
@@ -624,17 +644,63 @@ extension FamilyMember {
     }
 }
 
+nonisolated enum ActivitySubmissionKind: nonisolated Equatable {
+    case child
+    case caregiverRecommendation
+    case parent
+
+    var requiresParentApproval: Bool {
+        self != .parent
+    }
+
+    var accountDescription: String {
+        switch self {
+        case .child: "Child account"
+        case .caregiverRecommendation: "Caregiver recommendation"
+        case .parent: "Adult account"
+        }
+    }
+
+    var submittedBy: String {
+        switch self {
+        case .child: "Child"
+        case .caregiverRecommendation: "Caregiver"
+        case .parent: "Parent"
+        }
+    }
+}
+
 enum ActivitySubmissionPolicy {
+    static func submissionKind(
+        member: FamilyMember?,
+        membershipRole: FamilyMembershipRole?,
+        on date: Date = .now,
+        calendar: Calendar = .current
+    ) -> ActivitySubmissionKind {
+        if membershipRole == .caregiver || member?.role == .caregiver {
+            return .caregiverRecommendation
+        }
+        if let member, member.isChildAccountHolder(on: date, calendar: calendar) {
+            return .child
+        }
+        if member == nil, membershipRole == .child {
+            return .child
+        }
+        return .parent
+    }
+
     static func isChildAccountHolder(
         member: FamilyMember?,
         membershipRole: FamilyMembershipRole?,
         on date: Date = .now,
         calendar: Calendar = .current
     ) -> Bool {
-        if let member {
-            return member.isChildAccountHolder(on: date, calendar: calendar)
-        }
-        return membershipRole == .child
+        submissionKind(
+            member: member,
+            membershipRole: membershipRole,
+            on: date,
+            calendar: calendar
+        ) == .child
     }
 }
 
@@ -648,6 +714,10 @@ enum FamilyMembershipRole: String, Codable, CaseIterable {
 }
 
 extension MemberRole {
+    var participatesInPoints: Bool {
+        self != .caregiver
+    }
+
     var familyListSortOrder: Int {
         switch self {
         case .child: 0
@@ -689,6 +759,10 @@ extension FamilyMembershipRole {
     }
 
     var canManageRules: Bool {
+        self == .familyAdmin || self == .owner || self == .parent
+    }
+
+    var canReviewLedger: Bool {
         self == .familyAdmin || self == .owner || self == .parent
     }
 }
