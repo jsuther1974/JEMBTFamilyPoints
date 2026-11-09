@@ -280,14 +280,41 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(readingAward.waitForExistence(timeout: 5))
         readingAward.tap()
 
-        let advocatePoints = app.descendants(matching: .any)["quickActivityPoints-Advocate Award"]
-        let readingPoints = app.descendants(matching: .any)["quickActivityPoints-Read to or with family"]
-        let readingQuantity = app.descendants(matching: .any)["quickActivityQuantity-Read to or with family"]
-        for _ in 0..<4 where !advocatePoints.exists || !readingPoints.exists || !readingQuantity.exists {
+        let currentWeekday = Calendar.current.component(.weekday, from: Date.now)
+        let secondWeekday = currentWeekday == 7 ? 1 : currentWeekday + 1
+        let advocateCurrentDay = app.buttons["activityDay-Advocate Award-\(currentWeekday)"]
+        let advocateSecondDay = app.buttons["activityDay-Advocate Award-\(secondWeekday)"]
+        let readingCurrentDay = app.buttons["activityDay-Read to or with family-\(currentWeekday)"]
+        let readingSecondDay = app.buttons["activityDay-Read to or with family-\(secondWeekday)"]
+        for _ in 0..<4 where !advocateCurrentDay.exists || !advocateSecondDay.exists {
             app.swipeUp()
         }
+        XCTAssertTrue(advocateCurrentDay.waitForExistence(timeout: 5))
+        XCTAssertEqual(advocateCurrentDay.value as? String, "Selected")
+        XCTAssertEqual(advocateSecondDay.value as? String, "Not selected")
+        advocateSecondDay.tap()
+        XCTAssertEqual(advocateSecondDay.value as? String, "Selected")
+        advocateCurrentDay.tap()
+        advocateSecondDay.tap()
+        XCTAssertFalse(saveButton.isEnabled)
+        advocateCurrentDay.tap()
+        advocateSecondDay.tap()
+        XCTAssertTrue(saveButton.isEnabled)
+        let advocatePoints = app.descendants(matching: .any)["quickActivityPoints-Advocate Award"]
         XCTAssertTrue(advocatePoints.waitForExistence(timeout: 5))
-        XCTAssertTrue(readingPoints.exists)
+        for _ in 0..<4 where !readingCurrentDay.exists || !readingSecondDay.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(readingCurrentDay.waitForExistence(timeout: 5))
+        XCTAssertEqual(readingCurrentDay.value as? String, "Selected")
+        XCTAssertEqual(readingSecondDay.value as? String, "Not selected")
+
+        let readingPoints = app.descendants(matching: .any)["quickActivityPoints-Read to or with family"]
+        let readingQuantity = app.descendants(matching: .any)["quickActivityQuantity-Read to or with family"]
+        for _ in 0..<4 where !readingPoints.exists || !readingQuantity.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(readingPoints.waitForExistence(timeout: 5))
         XCTAssertEqual(readingQuantity.value as? String, "1")
         XCTAssertTrue(saveButton.isEnabled)
         saveButton.tap()
@@ -302,8 +329,28 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Weekly Ledger"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["weeklyLedgerHeader"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["ledgerStartingValue-Mateo"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.descendants(matching: .any)["ledgerSummary-Mateo-Advocate Award"].waitForExistence(timeout: 5))
+        let advocateRows = app.descendants(matching: .any).matching(identifier: "ledgerSummary-Mateo-Advocate Award")
+        XCTAssertGreaterThanOrEqual(advocateRows.count, 2)
+        XCTAssertTrue(advocateRows.firstMatch.label.localizedCaseInsensitiveContains("recorded by"))
         XCTAssertTrue(app.descendants(matching: .any)["ledgerSummary-Mateo-Read to or with family"].waitForExistence(timeout: 5))
+
+        let itemSort = app.buttons["ledgerSort-item"]
+        let typeSort = app.buttons["ledgerSort-type"]
+        XCTAssertTrue(itemSort.waitForExistence(timeout: 5))
+        itemSort.tap()
+        typeSort.tap()
+        let resetSort = app.buttons["resetLedgerSort"]
+        XCTAssertTrue(resetSort.exists)
+        XCTAssertTrue(resetSort.isEnabled)
+        resetSort.tap()
+        XCTAssertFalse(resetSort.isEnabled)
+
+        advocateRows.firstMatch.doubleTap()
+        XCTAssertTrue(app.navigationBars["Edit Ledger Item"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Advocate Award"].exists)
+        XCTAssertTrue(app.staticTexts["Mateo"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'Mommy' OR label CONTAINS[c] 'Parent'")).firstMatch.exists)
+        app.navigationBars["Edit Ledger Item"].buttons["Cancel"].tap()
 
         app.navigationBars["Weekly Ledger"].buttons.firstMatch.tap()
         let penalizeDaddy = app.buttons["Penalize Daddy"]

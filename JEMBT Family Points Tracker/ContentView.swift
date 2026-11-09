@@ -66,6 +66,7 @@ private struct LogActivityView: View {
     @State private var quantity = 1.0
     @State private var points = 0
     @State private var notes = ""
+    @State private var selectedWeekdays: Set<Int> = [Calendar.current.component(.weekday, from: Date.now)]
     @State private var errorMessage: String?
 
     private var rules: [RuleTemplate] {
@@ -115,6 +116,13 @@ private struct LogActivityView: View {
                 }
 
                 if let rule = selectedRule {
+                    Section("Days occurred") {
+                        WeekdaySelector(
+                            weekEnding: PointsEngine.weekEnding(containing: .now),
+                            selection: $selectedWeekdays
+                        )
+                    }
+
                     Section(rule.frequencyKind == .count ? "How many times?" : "How much time?") {
                         Stepper(
                             rule.quantityDescription(quantity),
@@ -158,7 +166,7 @@ private struct LogActivityView: View {
                 }
 
                 Button("Save entry", action: save)
-                    .disabled(selectedMemberID == nil || selectedRuleID == nil)
+                    .disabled(selectedMemberID == nil || selectedRuleID == nil || selectedWeekdays.isEmpty)
             }
             .navigationTitle("Record Activity")
         }
@@ -173,23 +181,29 @@ private struct LogActivityView: View {
             return
         }
 
-        let entry = LedgerEntry(
-            memberID: memberID,
-            ruleID: rule.id,
-            weekEnding: PointsEngine.weekEnding(containing: .now),
-            title: rule.title,
-            notes: notes,
-            points: points,
-            kind: rule.kind,
-            status: submissionKind.requiresParentApproval ? .pending : .approved,
-            submittedBy: submissionKind.submittedBy,
-            reviewedBy: submissionKind.requiresParentApproval ? nil : "Parent",
-            reviewedAt: submissionKind.requiresParentApproval ? nil : .now,
-            quantity: quantity,
-            measurementUnit: rule.measurementUnit,
-            riderTitle: nil
-        )
-        modelContext.insert(entry)
+        let weekEnding = PointsEngine.weekEnding(containing: .now)
+        let recorder = appleIDManager.currentFamilyMember?.name ?? submissionKind.submittedBy
+        for occurredAt in PointsEngine.dates(inWeekEnding: weekEnding, matchingWeekdays: selectedWeekdays) {
+            modelContext.insert(
+                LedgerEntry(
+                    memberID: memberID,
+                    ruleID: rule.id,
+                    occurredAt: occurredAt,
+                    weekEnding: weekEnding,
+                    title: rule.title,
+                    notes: notes,
+                    points: points,
+                    kind: rule.kind,
+                    status: submissionKind.requiresParentApproval ? .pending : .approved,
+                    submittedBy: recorder,
+                    reviewedBy: submissionKind.requiresParentApproval ? nil : recorder,
+                    reviewedAt: submissionKind.requiresParentApproval ? nil : .now,
+                    quantity: quantity,
+                    measurementUnit: rule.measurementUnit,
+                    riderTitle: nil
+                )
+            )
+        }
 
         do {
             try modelContext.save()
@@ -197,6 +211,7 @@ private struct LogActivityView: View {
             quantity = 1
             points = 0
             notes = ""
+            selectedWeekdays = [Calendar.current.component(.weekday, from: Date.now)]
             errorMessage = nil
         } catch {
             errorMessage = "The entry could not be saved: \(error.localizedDescription)"

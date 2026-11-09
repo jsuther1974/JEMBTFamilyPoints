@@ -674,6 +674,7 @@ private struct QuickActivityRequest: Identifiable {
 private struct QuickActivityDraft {
     var quantity: Double
     var points: Int
+    var weekdays: Set<Int>
 }
 
 private struct QuickActivityView: View {
@@ -689,6 +690,12 @@ private struct QuickActivityView: View {
     @State private var drafts: [UUID: QuickActivityDraft] = [:]
     @State private var notes = ""
     @State private var errorMessage: String?
+
+    init(member: FamilyMember, kind: EntryKind, weekEnding: Date) {
+        self.member = member
+        self.kind = kind
+        self.weekEnding = weekEnding
+    }
 
     private var catalog: RuleCatalog { kind == .reward ? .incentives : .disincentives }
 
@@ -731,6 +738,11 @@ private struct QuickActivityView: View {
 
                 ForEach(selectedRules) { rule in
                     Section(rule.title) {
+                        WeekdaySelector(
+                            weekEnding: weekEnding,
+                            selection: weekdaysBinding(for: rule),
+                            identifierPrefix: "activityDay-\(rule.title)"
+                        )
                         if rule.frequencyKind == .time {
                             LabeledContent("Quantity") {
                                 HStack(spacing: 6) {
@@ -783,7 +795,7 @@ private struct QuickActivityView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save", action: save)
-                        .disabled(selectedRules.isEmpty)
+                        .disabled(selectedRules.isEmpty || selectedRules.contains { drafts[$0.id]?.weekdays.isEmpty != false })
                 }
             }
         }
@@ -802,7 +814,8 @@ private struct QuickActivityView: View {
         let quantity = rule.defaultEntryQuantity
         drafts[rule.id] = QuickActivityDraft(
             quantity: quantity,
-            points: calculatedPoints(for: rule, quantity: quantity)
+            points: calculatedPoints(for: rule, quantity: quantity),
+            weekdays: [PointsEngine.defaultWeekday(inWeekEnding: weekEnding)]
         )
         errorMessage = nil
     }
@@ -814,7 +827,8 @@ private struct QuickActivityView: View {
                 let quantity = max(1, quantity)
                 drafts[rule.id] = QuickActivityDraft(
                     quantity: quantity,
-                    points: calculatedPoints(for: rule, quantity: quantity)
+                    points: calculatedPoints(for: rule, quantity: quantity),
+                    weekdays: drafts[rule.id]?.weekdays ?? [PointsEngine.defaultWeekday(inWeekEnding: weekEnding)]
                 )
             }
         )
@@ -826,6 +840,17 @@ private struct QuickActivityView: View {
             set: { points in
                 guard var draft = drafts[rule.id] else { return }
                 draft.points = min(max(points, pointRange.lowerBound), pointRange.upperBound)
+                drafts[rule.id] = draft
+            }
+        )
+    }
+
+    private func weekdaysBinding(for rule: RuleTemplate) -> Binding<Set<Int>> {
+        Binding(
+            get: { drafts[rule.id]?.weekdays ?? [] },
+            set: { weekdays in
+                guard var draft = drafts[rule.id] else { return }
+                draft.weekdays = weekdays
                 drafts[rule.id] = draft
             }
         )
@@ -854,37 +879,40 @@ private struct QuickActivityView: View {
         let selectedDrafts = selectedRules.compactMap { rule in
             drafts[rule.id].map { (rule, $0) }
         }
-        guard !selectedDrafts.isEmpty else { return }
+        guard !selectedDrafts.isEmpty,
+              selectedDrafts.allSatisfy({ !$0.1.weekdays.isEmpty }) else { return }
 
         let submissionKind = ActivitySubmissionPolicy.submissionKind(
             member: appleIDManager.currentFamilyMember,
             membershipRole: appleIDManager.currentMembership?.role
         )
-        let occurredAt = Calendar.current.isDate(
-            weekEnding,
-            inSameDayAs: PointsEngine.weekEnding(containing: .now)
-        ) ? Date.now : weekEnding
         let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-
+        let recorder = appleIDManager.currentFamilyMember?.name ?? submissionKind.submittedBy
         for (rule, draft) in selectedDrafts {
-            modelContext.insert(
-                LedgerEntry(
-                    memberID: member.id,
-                    ruleID: rule.id,
-                    occurredAt: occurredAt,
-                    weekEnding: weekEnding,
-                    title: rule.title,
-                    notes: trimmedNotes,
-                    points: draft.points,
-                    kind: kind,
-                    status: submissionKind.requiresParentApproval ? .pending : .approved,
-                    submittedBy: submissionKind.submittedBy,
-                    reviewedBy: submissionKind.requiresParentApproval ? nil : "Parent",
-                    reviewedAt: submissionKind.requiresParentApproval ? nil : .now,
-                    quantity: draft.quantity,
-                    measurementUnit: rule.measurementUnit
-                )
+            let occurrenceDates = PointsEngine.dates(
+                inWeekEnding: weekEnding,
+                matchingWeekdays: draft.weekdays
             )
+            for occurredAt in occurrenceDates {
+                modelContext.insert(
+                    LedgerEntry(
+                        memberID: member.id,
+                        ruleID: rule.id,
+                        occurredAt: occurredAt,
+                        weekEnding: weekEnding,
+                        title: rule.title,
+                        notes: trimmedNotes,
+                        points: draft.points,
+                        kind: kind,
+                        status: submissionKind.requiresParentApproval ? .pending : .approved,
+                        submittedBy: recorder,
+                        reviewedBy: submissionKind.requiresParentApproval ? nil : recorder,
+                        reviewedAt: submissionKind.requiresParentApproval ? nil : .now,
+                        quantity: draft.quantity,
+                        measurementUnit: rule.measurementUnit
+                    )
+                )
+            }
         }
 
         do {
@@ -893,6 +921,45 @@ private struct QuickActivityView: View {
         } catch {
             errorMessage = "The entries could not be saved: \(error.localizedDescription)"
         }
+    }
+}
+
+struct WeekdaySelector: View {
+    let weekEnding: Date
+    @Binding var selection: Set<Int>
+    var identifierPrefix = "activityDay"
+
+    private var dates: [Date] { PointsEngine.dates(inWeekEnding: weekEnding) }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(dates, id: \.self) { date in
+                let weekday = Calendar.current.component(.weekday, from: date)
+                let isSelected = selection.contains(weekday)
+                Button {
+                    if isSelected {
+                        selection.remove(weekday)
+                    } else {
+                        selection.insert(weekday)
+                    }
+                } label: {
+                    VStack(spacing: 2) {
+                        Text(date.formatted(.dateTime.weekday(.narrow)))
+                            .font(.caption.bold())
+                        Text(date.formatted(.dateTime.day()))
+                            .font(.caption2)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 36)
+                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    .background(isSelected ? Color.accentColor : Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(date.formatted(.dateTime.weekday(.wide).month().day()))
+                .accessibilityValue(isSelected ? "Selected" : "Not selected")
+                .accessibilityIdentifier("\(identifierPrefix)-\(weekday)")
+            }
+        }
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -905,6 +972,8 @@ struct WeeklyLedgerView: View {
     @Query private var entries: [LedgerEntry]
     @Query private var rules: [RuleTemplate]
     @State private var reviewErrorMessage: String?
+    @State private var sortDescriptors = PointsEngine.defaultLedgerSort
+    @State private var editingSummary: LedgerSummary?
 
     private var canReview: Bool {
         appleIDManager.currentMembership?.role.canReviewLedger == true
@@ -917,11 +986,16 @@ struct WeeklyLedgerView: View {
     }
 
     private var summaries: [LedgerSummary] {
-        PointsEngine.ledgerSummaries(
+        let summaries = PointsEngine.ledgerSummaries(
             weekEnding: weekEnding,
             memberIDs: Set(familyMembers.map(\.id)),
             entries: entries,
             rules: rules.filter { $0.familyID == appleIDManager.currentFamily?.id }
+        )
+        return PointsEngine.sortLedgerSummaries(
+            summaries,
+            by: sortDescriptors,
+            memberNames: Dictionary(uniqueKeysWithValues: familyMembers.map { ($0.id, $0.name) })
         )
     }
 
@@ -953,27 +1027,29 @@ struct WeeklyLedgerView: View {
                 ScrollView([.horizontal, .vertical]) {
                     LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
                         Section {
-                            ForEach(sortedMembers) { member in
-                                if member.role == .child {
-                                    WeeklyLedgerStartingRow(
-                                        memberName: member.name,
-                                        points: PointsEngine.startingPoints(for: member, weekEnding: weekEnding)
-                                    )
-                                }
-                                ForEach(summaries.filter { $0.memberID == member.id }) { summary in
-                                    WeeklyLedgerRow(
-                                        summary: summary,
-                                        memberName: member.name,
-                                        canReview: canReview,
-                                        onApproveItem: { review(summary, as: .approved) },
-                                        onRejectItem: { review(summary, as: .rejected) },
-                                        onApproveAll: { reviewAll(as: .approved) },
-                                        onRejectAll: { reviewAll(as: .rejected) }
-                                    )
-                                }
+                            ForEach(sortedMembers.filter { $0.role == .child }) { member in
+                                WeeklyLedgerStartingRow(
+                                    memberName: member.name,
+                                    points: PointsEngine.startingPoints(for: member, weekEnding: weekEnding)
+                                )
+                            }
+                            ForEach(summaries) { summary in
+                                WeeklyLedgerRow(
+                                    summary: summary,
+                                    memberName: memberName(for: summary.memberID),
+                                    canReview: canReview,
+                                    onEdit: { editingSummary = summary },
+                                    onApproveItem: { review(summary, as: .approved) },
+                                    onRejectItem: { review(summary, as: .rejected) },
+                                    onApproveAll: { reviewAll(as: .approved) },
+                                    onRejectAll: { reviewAll(as: .rejected) }
+                                )
                             }
                         } header: {
-                            WeeklyLedgerHeader()
+                            WeeklyLedgerHeader(
+                                sortDescriptors: sortDescriptors,
+                                onSelectSort: selectSort
+                            )
                         }
                     }
                     .frame(minWidth: WeeklyLedgerColumns.tableWidth, alignment: .leading)
@@ -984,6 +1060,23 @@ struct WeeklyLedgerView: View {
         }
         .navigationTitle("Weekly Ledger")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Reset Sort", systemImage: "arrow.up.arrow.down") {
+                    sortDescriptors = PointsEngine.defaultLedgerSort
+                }
+                .disabled(sortDescriptors == PointsEngine.defaultLedgerSort)
+                .accessibilityIdentifier("resetLedgerSort")
+            }
+        }
+        .sheet(item: $editingSummary) { summary in
+            LedgerEntryEditorView(
+                entries: entries.filter { Set(summary.entryIDs).contains($0.id) },
+                memberName: memberName(for: summary.memberID),
+                weekEnding: weekEnding,
+                canEdit: canReview
+            )
+        }
         .safeAreaInset(edge: .top) {
             VStack(spacing: 4) {
                 Text("Week ending \(weekEnding.formatted(date: .abbreviated, time: .omitted))")
@@ -998,6 +1091,23 @@ struct WeeklyLedgerView: View {
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity)
             .background(.bar)
+        }
+    }
+
+    private func memberName(for id: UUID) -> String {
+        familyMembers.first { $0.id == id }?.name ?? "Unknown"
+    }
+
+    private func selectSort(_ column: LedgerSortColumn) {
+        if sortDescriptors == PointsEngine.defaultLedgerSort {
+            sortDescriptors = [LedgerSortDescriptor(column: column, ascending: true)]
+            return
+        }
+        if let index = sortDescriptors.firstIndex(where: { $0.column == column }) {
+            let current = sortDescriptors[index]
+            sortDescriptors[index] = LedgerSortDescriptor(column: column, ascending: !current.ascending)
+        } else {
+            sortDescriptors.append(LedgerSortDescriptor(column: column, ascending: true))
         }
     }
 
@@ -1041,6 +1151,8 @@ private enum WeeklyLedgerColumns {
     static let type: CGFloat = 34
     static let item: CGFloat = 150
     static let person: CGFloat = 100
+    static let day: CGFloat = 72
+    static let recordedBy: CGFloat = 110
     static let count: CGFloat = 42
     static let recordCount: CGFloat = 56
     static let points: CGFloat = 72
@@ -1049,29 +1161,63 @@ private enum WeeklyLedgerColumns {
     static let status: CGFloat = 150
     static let review: CGFloat = 150
     static let spacing: CGFloat = 8
-    static let tableWidth = type + item + person + count + recordCount + points + recordPoints + next + status + review + spacing * 9
+    static let tableWidth = type + item + person + day + recordedBy + count + recordCount + points + recordPoints + next + status + review + spacing * 11
 }
 
 private struct WeeklyLedgerHeader: View {
+    let sortDescriptors: [LedgerSortDescriptor]
+    let onSelectSort: (LedgerSortColumn) -> Void
+
     var body: some View {
         HStack(spacing: WeeklyLedgerColumns.spacing) {
-            Text("Type").frame(width: WeeklyLedgerColumns.type)
-            Text("Item").frame(width: WeeklyLedgerColumns.item, alignment: .leading)
-            Text("Status").frame(width: WeeklyLedgerColumns.status, alignment: .leading)
+            header("Type", .type, width: WeeklyLedgerColumns.type)
+            header("Item", .item, width: WeeklyLedgerColumns.item, alignment: .leading)
+            header("Status", .status, width: WeeklyLedgerColumns.status, alignment: .leading)
             Text("Review").frame(width: WeeklyLedgerColumns.review)
-            Text("Person").frame(width: WeeklyLedgerColumns.person, alignment: .leading)
-            Text("#").frame(width: WeeklyLedgerColumns.count, alignment: .trailing)
-            Text("Max #").frame(width: WeeklyLedgerColumns.recordCount, alignment: .trailing)
-            Text("Week").frame(width: WeeklyLedgerColumns.points, alignment: .trailing)
-            Text("Record").frame(width: WeeklyLedgerColumns.recordPoints, alignment: .trailing)
-            Text("Next").frame(width: WeeklyLedgerColumns.next, alignment: .trailing)
+            header("Person", .person, width: WeeklyLedgerColumns.person, alignment: .leading)
+            header("Day", .day, width: WeeklyLedgerColumns.day, alignment: .leading)
+            header("Recorded by", .recordedBy, width: WeeklyLedgerColumns.recordedBy, alignment: .leading)
+            header("#", .count, width: WeeklyLedgerColumns.count, alignment: .trailing)
+            header("Max #", .recordCount, width: WeeklyLedgerColumns.recordCount, alignment: .trailing)
+            header("Week", .points, width: WeeklyLedgerColumns.points, alignment: .trailing)
+            header("Record", .recordPoints, width: WeeklyLedgerColumns.recordPoints, alignment: .trailing)
+            header("Next", .next, width: WeeklyLedgerColumns.next, alignment: .trailing)
         }
         .font(.caption2.bold())
         .foregroundStyle(.secondary)
         .padding(.vertical, 7)
         .background(.bar)
         .overlay(alignment: .bottom) { Divider() }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("weeklyLedgerHeader")
+    }
+
+    private func header(
+        _ title: String,
+        _ column: LedgerSortColumn,
+        width: CGFloat,
+        alignment: Alignment = .center
+    ) -> some View {
+        let index = sortDescriptors.firstIndex { $0.column == column }
+        let descriptor = index.map { sortDescriptors[$0] }
+        return Button {
+            onSelectSort(column)
+        } label: {
+            HStack(spacing: 2) {
+                Text(title)
+                if let descriptor, let index {
+                    Image(systemName: descriptor.ascending ? "arrow.up" : "arrow.down")
+                    Text("\(index + 1)")
+                        .font(.system(size: 8, weight: .bold))
+                }
+            }
+            .frame(width: width, alignment: alignment)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Sort by \(title)")
+        .accessibilityValue(descriptor == nil ? "Not selected" : "Priority \((index ?? 0) + 1), \(descriptor!.ascending ? "ascending" : "descending")")
+        .accessibilityIdentifier("ledgerSort-\(column.rawValue)")
     }
 }
 
@@ -1092,6 +1238,8 @@ private struct WeeklyLedgerStartingRow: View {
                 .frame(width: WeeklyLedgerColumns.status, alignment: .leading)
             placeholder(width: WeeklyLedgerColumns.review)
             Text(memberName).frame(width: WeeklyLedgerColumns.person, alignment: .leading)
+            placeholder(width: WeeklyLedgerColumns.day)
+            placeholder(width: WeeklyLedgerColumns.recordedBy)
             placeholder(width: WeeklyLedgerColumns.count)
             placeholder(width: WeeklyLedgerColumns.recordCount)
             Text(signed(points)).frame(width: WeeklyLedgerColumns.points, alignment: .trailing)
@@ -1118,6 +1266,7 @@ private struct WeeklyLedgerRow: View {
     let summary: LedgerSummary
     let memberName: String
     let canReview: Bool
+    let onEdit: () -> Void
     let onApproveItem: () -> Void
     let onRejectItem: () -> Void
     let onApproveAll: () -> Void
@@ -1165,6 +1314,11 @@ private struct WeeklyLedgerRow: View {
             Text(memberName)
                 .lineLimit(1)
                 .frame(width: WeeklyLedgerColumns.person, alignment: .leading)
+            Text(summary.occurredAt.formatted(.dateTime.weekday(.abbreviated)))
+                .frame(width: WeeklyLedgerColumns.day, alignment: .leading)
+            Text(summary.submittedBy.isEmpty ? "Unknown" : summary.submittedBy)
+                .lineLimit(1)
+                .frame(width: WeeklyLedgerColumns.recordedBy, alignment: .leading)
             Text(summary.weeklyCount.formatted())
                 .frame(width: WeeklyLedgerColumns.count, alignment: .trailing)
             Text(summary.recordWeeklyCount.formatted())
@@ -1180,9 +1334,13 @@ private struct WeeklyLedgerRow: View {
         .font(.caption)
         .padding(.vertical, 6)
         .overlay(alignment: .bottom) { Divider() }
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2, perform: onEdit)
+        .accessibilityAction(named: "Edit") { onEdit() }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(summary.kind == .reward ? "Reward" : "Penalty"), \(summary.title), \(memberName), " +
+            "\(summary.occurredAt.formatted(.dateTime.weekday(.wide))), recorded by \(summary.submittedBy), " +
             "\(summary.weeklyCount) this week, \(signed(summary.weeklyPoints)) points, " +
             "record \(summary.recordWeeklyCount) times and \(signed(summary.recordWeeklyPoints)) points, " +
             "next \(summary.nextPoints.map(signed) ?? "not available")" +
@@ -1219,6 +1377,125 @@ private struct WeeklyLedgerRow: View {
         if summary.pendingCount > 0 { return .orange }
         if summary.approvedCount > 0 { return .green }
         return .red
+    }
+}
+
+private struct LedgerEntryEditorView: View {
+    let entries: [LedgerEntry]
+    let memberName: String
+    let weekEnding: Date
+    let canEdit: Bool
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @State private var occurredAt: Date
+    @State private var totalPoints: Int
+    @State private var totalQuantity: Double
+    @State private var notes: String
+    @State private var errorMessage: String?
+
+    init(entries: [LedgerEntry], memberName: String, weekEnding: Date, canEdit: Bool) {
+        self.entries = entries
+        self.memberName = memberName
+        self.weekEnding = weekEnding
+        self.canEdit = canEdit
+        _occurredAt = State(initialValue: entries.first.map { PointsEngine.occurrenceDate(for: $0) } ?? weekEnding)
+        _totalPoints = State(initialValue: entries.reduce(0) { $0 + $1.points })
+        _totalQuantity = State(initialValue: entries.reduce(0) { $0 + $1.quantity })
+        let distinctNotes = Set(entries.map(\.notes))
+        _notes = State(initialValue: distinctNotes.count == 1 ? distinctNotes.first ?? "" : "")
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Entry") {
+                    LabeledContent("Item", value: entries.first?.title ?? "Unknown")
+                    LabeledContent("Person", value: memberName)
+                    LabeledContent("Recorded by", value: recorderNames)
+                    LabeledContent("Status", value: statusDescription)
+                    LabeledContent("Records", value: entries.count.formatted())
+                }
+                Section("Activity") {
+                    DatePicker(
+                        "Day occurred",
+                        selection: $occurredAt,
+                        in: dateRange,
+                        displayedComponents: .date
+                    )
+                    Stepper("Total points: \(totalPoints)", value: $totalPoints, in: -100_000...100_000)
+                    Stepper("Total quantity: \(totalQuantity.formatted())", value: $totalQuantity, in: 1...100_000, step: 1)
+                    TextField("Notes", text: $notes, axis: .vertical)
+                        .lineLimit(2...5)
+                }
+                .disabled(!canEdit)
+                if !canEdit {
+                    Label("Only a parent can edit ledger entries.", systemImage: "lock.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let errorMessage {
+                    Text(errorMessage).foregroundStyle(.red)
+                }
+            }
+            .navigationTitle(canEdit ? "Edit Ledger Item" : "Ledger Item")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                if canEdit {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save", action: save)
+                    }
+                }
+            }
+        }
+    }
+
+    private var dateRange: ClosedRange<Date> {
+        let dates = PointsEngine.dates(inWeekEnding: weekEnding)
+        return (dates.first ?? weekEnding)...(dates.last ?? weekEnding)
+    }
+
+    private var recorderNames: String {
+        Array(Set(entries.map(\.submittedBy).filter { !$0.isEmpty }))
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            .joined(separator: ", ")
+    }
+
+    private var statusDescription: String {
+        let statuses = Set(entries.map(\.statusRawValue))
+        return statuses.count == 1 ? statuses.first?.capitalized ?? "Unknown" : "Mixed"
+    }
+
+    private func save() {
+        guard canEdit, !entries.isEmpty else { return }
+        let pointDistribution = distribute(totalPoints, across: entries.count)
+        let quantityPerEntry = totalQuantity / Double(entries.count)
+        for (index, entry) in entries.enumerated() {
+            entry.occurredAt = Calendar.current.startOfDay(for: occurredAt)
+            entry.weekEnding = weekEnding
+            entry.points = pointDistribution[index]
+            entry.quantity = quantityPerEntry
+            entry.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        do {
+            try modelContext.save()
+            dismiss()
+        } catch {
+            modelContext.rollback()
+            errorMessage = "The ledger item could not be saved: \(error.localizedDescription)"
+        }
+    }
+
+    private func distribute(_ total: Int, across count: Int) -> [Int] {
+        guard count > 0 else { return [] }
+        let quotient = total / count
+        let remainder = total % count
+        return (0..<count).map { index in
+            quotient + (index < abs(remainder) ? (remainder > 0 ? 1 : -1) : 0)
+        }
     }
 }
 

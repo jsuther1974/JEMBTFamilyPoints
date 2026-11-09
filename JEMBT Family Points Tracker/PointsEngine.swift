@@ -6,6 +6,8 @@ struct LedgerSummary: Identifiable {
     let title: String
     let iconName: String
     let kind: EntryKind
+    let occurredAt: Date
+    let submittedBy: String
     let weeklyCount: Int
     let recordWeeklyCount: Int
     let weeklyPoints: Int
@@ -16,13 +18,25 @@ struct LedgerSummary: Identifiable {
     let pendingCount: Int
     let pendingPoints: Int
     let rejectedCount: Int
+    let entryIDs: [UUID]
     let pendingEntryIDs: [UUID]
 
     var hasPendingEntries: Bool { pendingCount > 0 }
 
     var id: String {
-        "\(memberID.uuidString)-\(ruleID?.uuidString ?? title)-\(kind.rawValue)"
+        "\(memberID.uuidString)-\(ruleID?.uuidString ?? title)-\(kind.rawValue)-\(occurredAt.timeIntervalSinceReferenceDate)"
     }
+}
+
+nonisolated enum LedgerSortColumn: String, CaseIterable, Identifiable {
+    case type, item, status, person, day, recordedBy, count, recordCount, points, recordPoints, next
+
+    var id: String { rawValue }
+}
+
+nonisolated struct LedgerSortDescriptor: Equatable {
+    let column: LedgerSortColumn
+    let ascending: Bool
 }
 
 struct PendingPointTotals {
@@ -34,6 +48,12 @@ struct PendingPointTotals {
 }
 
 enum PointsEngine {
+
+    static let defaultLedgerSort = [
+        LedgerSortDescriptor(column: .person, ascending: true),
+        LedgerSortDescriptor(column: .day, ascending: true),
+        LedgerSortDescriptor(column: .item, ascending: true)
+    ]
     static func weekEnding(containing date: Date, calendar: Calendar = .current) -> Date {
         let startOfDay = calendar.startOfDay(for: date)
         let weekday = calendar.component(.weekday, from: startOfDay)
@@ -54,6 +74,44 @@ enum PointsEngine {
         calendar: Calendar = .current
     ) -> Int {
         age(from: member.birthDate, at: weekEnding, calendar: calendar) ?? 0
+    }
+
+    static func dates(inWeekEnding weekEnding: Date, calendar: Calendar = .current) -> [Date] {
+        let end = calendar.startOfDay(for: weekEnding)
+        return (0..<7).compactMap { offset in
+            calendar.date(byAdding: .day, value: offset - 6, to: end)
+        }
+    }
+
+    static func dates(
+        inWeekEnding weekEnding: Date,
+        matchingWeekdays weekdays: Set<Int>,
+        calendar: Calendar = .current
+    ) -> [Date] {
+        dates(inWeekEnding: weekEnding, calendar: calendar).filter {
+            weekdays.contains(calendar.component(.weekday, from: $0))
+        }
+    }
+
+    static func defaultWeekday(
+        inWeekEnding weekEnding: Date,
+        today: Date = .now,
+        calendar: Calendar = .current
+    ) -> Int {
+        let date = calendar.isDate(self.weekEnding(containing: today, calendar: calendar), inSameDayAs: weekEnding)
+            ? today
+            : weekEnding
+        return calendar.component(.weekday, from: date)
+    }
+
+    static func occurrenceDate(
+        for entry: LedgerEntry,
+        calendar: Calendar = .current
+    ) -> Date {
+        let occurredAt = calendar.startOfDay(for: entry.occurredAt)
+        return calendar.isDate(weekEnding(containing: occurredAt, calendar: calendar), inSameDayAs: entry.weekEnding)
+            ? occurredAt
+            : calendar.startOfDay(for: entry.weekEnding)
     }
 
     static func age(
@@ -172,31 +230,46 @@ enum PointsEngine {
             let ruleID: UUID?
             let title: String
             let kind: EntryKind
+            let occurredAt: Date
         }
 
         let rulesByID = Dictionary(uniqueKeysWithValues: rules.map { ($0.id, $0) })
         let eligibleEntries = entries.filter {
             memberIDs.contains($0.memberID)
         }
-        let grouped = Dictionary(grouping: eligibleEntries) {
-            let rule = $0.ruleID.flatMap { rulesByID[$0] }
-            let displayKind: EntryKind = if let rule {
+        func displayKind(for entry: LedgerEntry) -> EntryKind {
+            let rule = entry.ruleID.flatMap { rulesByID[$0] }
+            return if let rule {
                 switch rule.catalog {
                 case .incentives: .reward
                 case .disincentives: .penalty
                 case .tradingPost: .purchase
                 }
             } else {
-                $0.kind == .adjustment ? ($0.points < 0 ? .penalty : .reward) : $0.kind
+                entry.kind == .adjustment ? (entry.points < 0 ? .penalty : .reward) : entry.kind
             }
-            return Key(memberID: $0.memberID, ruleID: $0.ruleID, title: $0.title, kind: displayKind)
         }
 
-        return grouped.compactMap { key, matchingEntries in
-            let currentEntries = matchingEntries.filter {
-                calendar.isDate($0.weekEnding, inSameDayAs: weekEnding)
+        let currentWeekEntries = eligibleEntries.filter {
+            calendar.isDate($0.weekEnding, inSameDayAs: weekEnding)
+        }
+        let grouped = Dictionary(grouping: currentWeekEntries) {
+            return Key(
+                memberID: $0.memberID,
+                ruleID: $0.ruleID,
+                title: $0.title,
+                kind: displayKind(for: $0),
+                occurredAt: occurrenceDate(for: $0, calendar: calendar)
+            )
+        }
+
+        return grouped.map { key, currentEntries in
+            let matchingEntries = eligibleEntries.filter {
+                $0.memberID == key.memberID &&
+                $0.ruleID == key.ruleID &&
+                $0.title == key.title &&
+                displayKind(for: $0) == key.kind
             }
-            guard !currentEntries.isEmpty else { return nil }
 
             let approvedEntries = matchingEntries.filter { $0.status == .approved }
             let entriesByWeek = Dictionary(grouping: approvedEntries) {
@@ -207,11 +280,13 @@ enum PointsEngine {
                 weekEntries.reduce(0) { $0 + $1.points }
             }
             let rule = key.ruleID.flatMap { rulesByID[$0] }
-            let activeCurrentEntries = currentEntries.filter { $0.status != .rejected }
+            let activeWeeklyEntries = matchingEntries.filter {
+                $0.status != .rejected && calendar.isDate($0.weekEnding, inSameDayAs: weekEnding)
+            }
             let approvedCurrentEntries = currentEntries.filter { $0.status == .approved }
             let pendingCurrentEntries = currentEntries.filter { $0.status == .pending }
             let rejectedCurrentEntries = currentEntries.filter { $0.status == .rejected }
-            let currentQuantity = activeCurrentEntries.reduce(0.0) { $0 + max(0, $1.quantity) }
+            let currentQuantity = activeWeeklyEntries.reduce(0.0) { $0 + max(0, $1.quantity) }
             let recordPoints = key.kind == .penalty
                 ? (weeklyTotals.min() ?? 0)
                 : (weeklyTotals.max() ?? 0)
@@ -222,9 +297,13 @@ enum PointsEngine {
                 title: key.title,
                 iconName: rule?.iconName ?? defaultLedgerIcon(for: key.kind),
                 kind: key.kind,
-                weeklyCount: activeCurrentEntries.count,
+                occurredAt: key.occurredAt,
+                submittedBy: Array(Set(currentEntries.map(\.submittedBy).filter { !$0.isEmpty }))
+                    .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+                    .joined(separator: ", "),
+                weeklyCount: activeWeeklyEntries.count,
                 recordWeeklyCount: weeklyCounts.max() ?? 0,
-                weeklyPoints: activeCurrentEntries.reduce(0) { $0 + $1.points },
+                weeklyPoints: activeWeeklyEntries.reduce(0) { $0 + $1.points },
                 recordWeeklyPoints: recordPoints,
                 nextPoints: rule?.incrementalPoints(existingQuantity: currentQuantity),
                 approvedCount: approvedCurrentEntries.count,
@@ -232,6 +311,7 @@ enum PointsEngine {
                 pendingCount: pendingCurrentEntries.count,
                 pendingPoints: pendingCurrentEntries.reduce(0) { $0 + $1.points },
                 rejectedCount: rejectedCurrentEntries.count,
+                entryIDs: currentEntries.map(\.id),
                 pendingEntryIDs: pendingCurrentEntries.map(\.id)
             )
         }
@@ -239,6 +319,62 @@ enum PointsEngine {
             if $0.memberID != $1.memberID { return $0.memberID.uuidString < $1.memberID.uuidString }
             return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
         }
+    }
+
+    static func sortLedgerSummaries(
+        _ summaries: [LedgerSummary],
+        by descriptors: [LedgerSortDescriptor],
+        memberNames: [UUID: String]
+    ) -> [LedgerSummary] {
+        let descriptors = descriptors.isEmpty ? defaultLedgerSort : descriptors
+        return summaries.sorted { lhs, rhs in
+            for descriptor in descriptors {
+                let comparison = compare(
+                    lhs,
+                    rhs,
+                    column: descriptor.column,
+                    memberNames: memberNames
+                )
+                guard comparison != .orderedSame else { continue }
+                return descriptor.ascending
+                    ? comparison == .orderedAscending
+                    : comparison == .orderedDescending
+            }
+            return lhs.id < rhs.id
+        }
+    }
+
+    private static func compare(
+        _ lhs: LedgerSummary,
+        _ rhs: LedgerSummary,
+        column: LedgerSortColumn,
+        memberNames: [UUID: String]
+    ) -> ComparisonResult {
+        func compareStrings(_ first: String, _ second: String) -> ComparisonResult {
+            first.localizedCaseInsensitiveCompare(second)
+        }
+        func compareInts(_ first: Int, _ second: Int) -> ComparisonResult {
+            first == second ? .orderedSame : (first < second ? .orderedAscending : .orderedDescending)
+        }
+        switch column {
+        case .type: return compareStrings(lhs.kind.rawValue, rhs.kind.rawValue)
+        case .item: return compareStrings(lhs.title, rhs.title)
+        case .status: return compareInts(ledgerStatusRank(lhs), ledgerStatusRank(rhs))
+        case .person: return compareStrings(memberNames[lhs.memberID] ?? "", memberNames[rhs.memberID] ?? "")
+        case .day: return lhs.occurredAt.compare(rhs.occurredAt)
+        case .recordedBy: return compareStrings(lhs.submittedBy, rhs.submittedBy)
+        case .count: return compareInts(lhs.weeklyCount, rhs.weeklyCount)
+        case .recordCount: return compareInts(lhs.recordWeeklyCount, rhs.recordWeeklyCount)
+        case .points: return compareInts(lhs.weeklyPoints, rhs.weeklyPoints)
+        case .recordPoints: return compareInts(lhs.recordWeeklyPoints, rhs.recordWeeklyPoints)
+        case .next: return compareInts(lhs.nextPoints ?? Int.min, rhs.nextPoints ?? Int.min)
+        }
+    }
+
+    private static func ledgerStatusRank(_ summary: LedgerSummary) -> Int {
+        if summary.pendingCount > 0 { return 0 }
+        if summary.approvedCount > 0 { return 1 }
+        return 2
     }
 
     private static func defaultLedgerIcon(for kind: EntryKind) -> String {

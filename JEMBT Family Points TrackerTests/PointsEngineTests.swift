@@ -759,6 +759,149 @@ final class PointsEngineTests: XCTestCase {
         XCTAssertEqual(totals.net, 75)
     }
 
+    func testSelectedWeekdaysMapToSeparateDatesInSundayThroughSaturdayWeek() {
+        let weekEnding = date(2026, 11, 7)
+
+        let dates = PointsEngine.dates(
+            inWeekEnding: weekEnding,
+            matchingWeekdays: [1, 3, 7],
+            calendar: calendar
+        )
+
+        XCTAssertEqual(dates, [date(2026, 11, 1), date(2026, 11, 3), date(2026, 11, 7)])
+        XCTAssertEqual(
+            PointsEngine.defaultWeekday(
+                inWeekEnding: weekEnding,
+                today: date(2026, 11, 3),
+                calendar: calendar
+            ),
+            3
+        )
+        XCTAssertEqual(
+            PointsEngine.defaultWeekday(
+                inWeekEnding: weekEnding,
+                today: date(2026, 11, 8),
+                calendar: calendar
+            ),
+            7
+        )
+    }
+
+    func testLegacyOccurrenceOutsideStoredWeekFallsBackToWeekEnding() {
+        let weekEnding = date(2026, 11, 7)
+        let entry = LedgerEntry(
+            memberID: UUID(),
+            occurredAt: date(2026, 11, 8),
+            weekEnding: weekEnding,
+            title: "Legacy",
+            points: 10,
+            kind: .reward,
+            status: .approved,
+            submittedBy: "Parent"
+        )
+
+        XCTAssertEqual(PointsEngine.occurrenceDate(for: entry, calendar: calendar), weekEnding)
+    }
+
+    func testLedgerAggregatesByPersonDayAndItemAndPreservesRecordersAndEntryIDs() {
+        let familyID = UUID()
+        let child = FamilyMember(familyID: familyID, name: "Child", role: .child)
+        let rule = RuleTemplate(
+            familyID: familyID,
+            title: "Helping",
+            category: .household,
+            kind: .reward,
+            defaultPoints: 100
+        )
+        let weekEnding = date(2026, 11, 7)
+        let mondayOne = LedgerEntry(
+            memberID: child.id,
+            ruleID: rule.id,
+            occurredAt: date(2026, 11, 2),
+            weekEnding: weekEnding,
+            title: rule.title,
+            points: 100,
+            kind: .reward,
+            status: .approved,
+            submittedBy: "Alex"
+        )
+        let mondayTwo = LedgerEntry(
+            memberID: child.id,
+            ruleID: rule.id,
+            occurredAt: date(2026, 11, 2),
+            weekEnding: weekEnding,
+            title: rule.title,
+            points: 125,
+            kind: .reward,
+            status: .pending,
+            submittedBy: "Jamie"
+        )
+        let wednesday = LedgerEntry(
+            memberID: child.id,
+            ruleID: rule.id,
+            occurredAt: date(2026, 11, 4),
+            weekEnding: weekEnding,
+            title: rule.title,
+            points: 150,
+            kind: .reward,
+            status: .approved,
+            submittedBy: "Alex"
+        )
+
+        let summaries = PointsEngine.ledgerSummaries(
+            weekEnding: weekEnding,
+            memberIDs: [child.id],
+            entries: [mondayOne, mondayTwo, wednesday],
+            rules: [rule],
+            calendar: calendar
+        )
+        let monday = summaries.first { calendar.isDate($0.occurredAt, inSameDayAs: date(2026, 11, 2)) }
+
+        XCTAssertEqual(summaries.count, 2)
+        XCTAssertEqual(monday?.weeklyCount, 3)
+        XCTAssertEqual(monday?.weeklyPoints, 375)
+        XCTAssertEqual(monday?.submittedBy, "Alex, Jamie")
+        XCTAssertEqual(Set(monday?.entryIDs ?? []), Set([mondayOne.id, mondayTwo.id]))
+        XCTAssertEqual(monday?.pendingEntryIDs, [mondayTwo.id])
+        XCTAssertTrue(summaries.allSatisfy { $0.weeklyCount == 3 })
+        XCTAssertTrue(summaries.allSatisfy { $0.weeklyPoints == 375 })
+        XCTAssertTrue(summaries.allSatisfy { $0.recordWeeklyCount == 2 })
+        XCTAssertTrue(summaries.allSatisfy { $0.recordWeeklyPoints == 250 })
+    }
+
+    func testLedgerMultiColumnSortHonorsPriorityAndDirection() {
+        let familyID = UUID()
+        let amy = FamilyMember(familyID: familyID, name: "Amy", role: .child)
+        let zoe = FamilyMember(familyID: familyID, name: "Zoe", role: .child)
+        let ruleA = RuleTemplate(familyID: familyID, title: "Alpha", category: .household, kind: .reward, defaultPoints: 10)
+        let ruleB = RuleTemplate(familyID: familyID, title: "Beta", category: .household, kind: .reward, defaultPoints: 20)
+        let weekEnding = date(2026, 11, 7)
+        let entries = [
+            LedgerEntry(memberID: amy.id, ruleID: ruleB.id, occurredAt: date(2026, 11, 2), weekEnding: weekEnding, title: ruleB.title, points: 20, kind: .reward, status: .approved, submittedBy: "Parent"),
+            LedgerEntry(memberID: amy.id, ruleID: ruleA.id, occurredAt: date(2026, 11, 2), weekEnding: weekEnding, title: ruleA.title, points: 10, kind: .reward, status: .approved, submittedBy: "Parent"),
+            LedgerEntry(memberID: zoe.id, ruleID: ruleA.id, occurredAt: date(2026, 11, 4), weekEnding: weekEnding, title: ruleA.title, points: 10, kind: .reward, status: .approved, submittedBy: "Parent")
+        ]
+        let summaries = PointsEngine.ledgerSummaries(
+            weekEnding: weekEnding,
+            memberIDs: [amy.id, zoe.id],
+            entries: entries,
+            rules: [ruleA, ruleB],
+            calendar: calendar
+        )
+
+        let sorted = PointsEngine.sortLedgerSummaries(
+            summaries,
+            by: [
+                LedgerSortDescriptor(column: .person, ascending: false),
+                LedgerSortDescriptor(column: .item, ascending: true)
+            ],
+            memberNames: [amy.id: amy.name, zoe.id: zoe.name]
+        )
+
+        XCTAssertEqual(sorted.map(\.memberID), [zoe.id, amy.id, amy.id])
+        XCTAssertEqual(sorted.map(\.title), ["Alpha", "Alpha", "Beta"])
+    }
+
     private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
         calendar.date(from: DateComponents(year: year, month: month, day: day))!
     }
