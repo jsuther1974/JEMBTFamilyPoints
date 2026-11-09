@@ -376,11 +376,12 @@ private struct RuleEditorView: View {
                 }
 
                 Section {
-                    Stepper(
-                        "Point awards start on the \(ordinal(draft.firstAward)) award",
-                        value: $draft.firstAward,
-                        in: 1...100
-                    )
+                    LabeledContent("Point awards start on award") {
+                        TextField("Award", value: $draft.firstAward, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 70)
+                    }
                     Toggle("Stop awarding points", isOn: $draft.hasLastAward)
                     if draft.hasLastAward {
                         LabeledContent("Awards end after") {
@@ -472,8 +473,8 @@ private struct RuleEditorView: View {
             validationMessage = "Enter a name."
             return
         }
-        guard draft.pointsMagnitude >= 0, draft.frequencyCount >= 1 else {
-            validationMessage = "Enter valid point and frequency values."
+        guard draft.pointsMagnitude >= 0, draft.frequencyCount >= 1, draft.firstAward >= 1 else {
+            validationMessage = "Enter valid point, frequency, and starting-award values."
             return
         }
         if draft.hasLastAward, draft.lastAward < draft.firstAward {

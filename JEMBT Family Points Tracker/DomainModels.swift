@@ -293,6 +293,11 @@ final class RuleTemplate {
         frequencyKind == .count && countSchedule == .once ? 1 : max(1, frequencyValue)
     }
 
+    var defaultEntryQuantity: Double {
+        guard frequencyKind == .time else { return singleAwardQuantity }
+        return max(1, Double(firstAwardNumber) * max(1, frequencyValue))
+    }
+
     func awardCount(for quantity: Double) -> Int {
         guard quantity > 0 else { return 0 }
         if frequencyKind == .count && countSchedule == .once { return 1 }

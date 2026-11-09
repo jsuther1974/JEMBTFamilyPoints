@@ -81,6 +81,28 @@ final class RuleTemplateTests: XCTestCase {
         XCTAssertEqual(timedReward.incrementalPoints(existingQuantity: 15), 100)
     }
 
+    func testVariableEntryDefaultsToFirstPayableQuantity() {
+        let reading = makeRule(
+            points: 1,
+            minimum: 15,
+            frequencyKind: .time,
+            frequencyValue: 1,
+            timeUnit: .minute
+        )
+        let intervalActivity = makeRule(
+            points: 50,
+            minimum: 2,
+            frequencyKind: .time,
+            frequencyValue: 15,
+            timeUnit: .minute
+        )
+        let fixedAward = makeRule(points: 100, minimum: 4)
+
+        XCTAssertEqual(reading.defaultEntryQuantity, 15)
+        XCTAssertEqual(intervalActivity.defaultEntryQuantity, 30)
+        XCTAssertEqual(fixedAward.defaultEntryQuantity, 1)
+    }
+
     func testEntryKindMapsToRequestedCatalog() {
         XCTAssertEqual(makeRule(points: 50, kind: .reward).catalog, .incentives)
         XCTAssertEqual(makeRule(points: -50, kind: .penalty).catalog, .disincentives)

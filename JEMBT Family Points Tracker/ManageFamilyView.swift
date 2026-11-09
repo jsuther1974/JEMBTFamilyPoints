@@ -671,6 +671,11 @@ private struct QuickActivityRequest: Identifiable {
     var id: String { "\(member.id.uuidString)-\(kind.rawValue)" }
 }
 
+private struct QuickActivityDraft {
+    var quantity: Double
+    var points: Int
+}
+
 private struct QuickActivityView: View {
     let member: FamilyMember
     let kind: EntryKind
@@ -681,8 +686,7 @@ private struct QuickActivityView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \RuleTemplate.title) private var allRules: [RuleTemplate]
     @Query private var entries: [LedgerEntry]
-    @State private var selectedRuleID: UUID?
-    @State private var points = 0
+    @State private var drafts: [UUID: QuickActivityDraft] = [:]
     @State private var notes = ""
     @State private var errorMessage: String?
 
@@ -696,8 +700,8 @@ private struct QuickActivityView: View {
         }
     }
 
-    private var selectedRule: RuleTemplate? {
-        rules.first { $0.id == selectedRuleID }
+    private var selectedRules: [RuleTemplate] {
+        rules.filter { drafts[$0.id] != nil }
     }
 
     var body: some View {
@@ -715,7 +719,7 @@ private struct QuickActivityView: View {
                                 Text(rule.title)
                                     .foregroundStyle(.primary)
                                 Spacer()
-                                if selectedRuleID == rule.id {
+                                if drafts[rule.id] != nil {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundStyle(.tint)
                                 }
@@ -725,27 +729,45 @@ private struct QuickActivityView: View {
                     }
                 }
 
-                if let selectedRule {
-                    Section("This entry") {
+                ForEach(selectedRules) { rule in
+                    Section(rule.title) {
+                        if rule.frequencyKind == .time {
+                            LabeledContent("Quantity") {
+                                HStack(spacing: 6) {
+                                    TextField("Quantity", value: quantityBinding(for: rule), format: .number)
+                                        .keyboardType(.decimalPad)
+                                        .multilineTextAlignment(.trailing)
+                                        .frame(width: 90)
+                                        .accessibilityIdentifier("quickActivityQuantity-\(rule.title)")
+                                    Text(rule.timeUnit.label(for: drafts[rule.id]?.quantity ?? rule.defaultEntryQuantity))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
                         LabeledContent("Points") {
                             HStack(spacing: 8) {
-                                TextField("Points", value: $points, format: .number)
+                                TextField("Points", value: pointsBinding(for: rule), format: .number)
                                     .keyboardType(.numbersAndPunctuation)
                                     .multilineTextAlignment(.trailing)
                                     .frame(width: 90)
-                                    .accessibilityIdentifier("quickActivityPoints")
-                                Stepper("", value: $points, in: pointRange)
+                                    .accessibilityIdentifier("quickActivityPoints-\(rule.title)")
+                                Stepper("", value: pointsBinding(for: rule), in: pointRange)
                                     .labelsHidden()
                             }
                         }
-                        TextField("Notes (optional)", text: $notes, axis: .vertical)
-                            .lineLimit(2...5)
-                            .accessibilityIdentifier("quickActivityNotes")
-                        if !selectedRule.guidance.isEmpty {
-                            Text(selectedRule.guidance)
+                        if !rule.guidance.isEmpty {
+                            Text(rule.guidance)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                    }
+                }
+
+                if !selectedRules.isEmpty {
+                    Section("All selected entries") {
+                        TextField("Notes (optional)", text: $notes, axis: .vertical)
+                            .lineLimit(2...5)
+                            .accessibilityIdentifier("quickActivityNotes")
                     }
                 }
 
@@ -761,7 +783,7 @@ private struct QuickActivityView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save", action: save)
-                        .disabled(selectedRule == nil)
+                        .disabled(selectedRules.isEmpty)
                 }
             }
         }
@@ -772,8 +794,53 @@ private struct QuickActivityView: View {
     }
 
     private func select(_ rule: RuleTemplate) {
-        selectedRuleID = rule.id
-        let existingQuantity = entries
+        if drafts.removeValue(forKey: rule.id) != nil {
+            errorMessage = nil
+            return
+        }
+
+        let quantity = rule.defaultEntryQuantity
+        drafts[rule.id] = QuickActivityDraft(
+            quantity: quantity,
+            points: calculatedPoints(for: rule, quantity: quantity)
+        )
+        errorMessage = nil
+    }
+
+    private func quantityBinding(for rule: RuleTemplate) -> Binding<Double> {
+        Binding(
+            get: { drafts[rule.id]?.quantity ?? rule.defaultEntryQuantity },
+            set: { quantity in
+                let quantity = max(1, quantity)
+                drafts[rule.id] = QuickActivityDraft(
+                    quantity: quantity,
+                    points: calculatedPoints(for: rule, quantity: quantity)
+                )
+            }
+        )
+    }
+
+    private func pointsBinding(for rule: RuleTemplate) -> Binding<Int> {
+        Binding(
+            get: { drafts[rule.id]?.points ?? 0 },
+            set: { points in
+                guard var draft = drafts[rule.id] else { return }
+                draft.points = min(max(points, pointRange.lowerBound), pointRange.upperBound)
+                drafts[rule.id] = draft
+            }
+        )
+    }
+
+    private func calculatedPoints(for rule: RuleTemplate, quantity: Double) -> Int {
+        let points = rule.incrementalPoints(
+            existingQuantity: existingQuantity(for: rule),
+            additionalQuantity: quantity
+        )
+        return min(max(points, pointRange.lowerBound), pointRange.upperBound)
+    }
+
+    private func existingQuantity(for rule: RuleTemplate) -> Double {
+        entries
             .filter {
                 $0.memberID == member.id &&
                 $0.ruleID == rule.id &&
@@ -781,42 +848,50 @@ private struct QuickActivityView: View {
                 Calendar.current.isDate($0.weekEnding, inSameDayAs: weekEnding)
             }
             .reduce(0.0) { $0 + max(0, $1.quantity) }
-        points = min(max(rule.incrementalPoints(existingQuantity: existingQuantity), pointRange.lowerBound), pointRange.upperBound)
-        errorMessage = nil
     }
 
     private func save() {
-        guard let rule = selectedRule else { return }
+        let selectedDrafts = selectedRules.compactMap { rule in
+            drafts[rule.id].map { (rule, $0) }
+        }
+        guard !selectedDrafts.isEmpty else { return }
+
         let submissionKind = ActivitySubmissionPolicy.submissionKind(
             member: appleIDManager.currentFamilyMember,
             membershipRole: appleIDManager.currentMembership?.role
         )
-        modelContext.insert(
-            LedgerEntry(
-                memberID: member.id,
-                ruleID: rule.id,
-                occurredAt: Calendar.current.isDate(
-                    weekEnding,
-                    inSameDayAs: PointsEngine.weekEnding(containing: .now)
-                ) ? .now : weekEnding,
-                weekEnding: weekEnding,
-                title: rule.title,
-                notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
-                points: points,
-                kind: kind,
-                status: submissionKind.requiresParentApproval ? .pending : .approved,
-                submittedBy: submissionKind.submittedBy,
-                reviewedBy: submissionKind.requiresParentApproval ? nil : "Parent",
-                reviewedAt: submissionKind.requiresParentApproval ? nil : .now,
-                quantity: rule.singleAwardQuantity,
-                measurementUnit: rule.measurementUnit
+        let occurredAt = Calendar.current.isDate(
+            weekEnding,
+            inSameDayAs: PointsEngine.weekEnding(containing: .now)
+        ) ? Date.now : weekEnding
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        for (rule, draft) in selectedDrafts {
+            modelContext.insert(
+                LedgerEntry(
+                    memberID: member.id,
+                    ruleID: rule.id,
+                    occurredAt: occurredAt,
+                    weekEnding: weekEnding,
+                    title: rule.title,
+                    notes: trimmedNotes,
+                    points: draft.points,
+                    kind: kind,
+                    status: submissionKind.requiresParentApproval ? .pending : .approved,
+                    submittedBy: submissionKind.submittedBy,
+                    reviewedBy: submissionKind.requiresParentApproval ? nil : "Parent",
+                    reviewedAt: submissionKind.requiresParentApproval ? nil : .now,
+                    quantity: draft.quantity,
+                    measurementUnit: rule.measurementUnit
+                )
             )
-        )
+        }
+
         do {
             try modelContext.save()
             dismiss()
         } catch {
-            errorMessage = "The entry could not be saved: \(error.localizedDescription)"
+            errorMessage = "The entries could not be saved: \(error.localizedDescription)"
         }
     }
 }

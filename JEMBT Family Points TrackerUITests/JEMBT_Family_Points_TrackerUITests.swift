@@ -270,16 +270,25 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(saveButton.exists)
         XCTAssertFalse(saveButton.isEnabled)
 
-        let award = app.buttons["quickRule-Advocate Award"]
-        XCTAssertTrue(award.waitForExistence(timeout: 5))
-        award.tap()
-        let pointsField = app.descendants(matching: .any)["quickActivityPoints"]
-        let notesField = app.descendants(matching: .any)["quickActivityNotes"]
-        for _ in 0..<4 where !pointsField.exists {
+        let advocateAward = app.buttons["quickRule-Advocate Award"]
+        let readingAward = app.buttons["quickRule-Read to or with family"]
+        XCTAssertTrue(advocateAward.waitForExistence(timeout: 5))
+        advocateAward.tap()
+        for _ in 0..<4 where !readingAward.exists {
             app.swipeUp()
         }
-        XCTAssertTrue(pointsField.waitForExistence(timeout: 5))
-        XCTAssertTrue(notesField.exists)
+        XCTAssertTrue(readingAward.waitForExistence(timeout: 5))
+        readingAward.tap()
+
+        let advocatePoints = app.descendants(matching: .any)["quickActivityPoints-Advocate Award"]
+        let readingPoints = app.descendants(matching: .any)["quickActivityPoints-Read to or with family"]
+        let readingQuantity = app.descendants(matching: .any)["quickActivityQuantity-Read to or with family"]
+        for _ in 0..<4 where !advocatePoints.exists || !readingPoints.exists || !readingQuantity.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(advocatePoints.waitForExistence(timeout: 5))
+        XCTAssertTrue(readingPoints.exists)
+        XCTAssertEqual(readingQuantity.value as? String, "1")
         XCTAssertTrue(saveButton.isEnabled)
         saveButton.tap()
 
@@ -294,6 +303,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["weeklyLedgerHeader"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["ledgerStartingValue-Mateo"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["ledgerSummary-Mateo-Advocate Award"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["ledgerSummary-Mateo-Read to or with family"].waitForExistence(timeout: 5))
 
         app.navigationBars["Weekly Ledger"].buttons.firstMatch.tap()
         let penalizeDaddy = app.buttons["Penalize Daddy"]
