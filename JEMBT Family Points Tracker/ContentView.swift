@@ -7,9 +7,11 @@ struct ContentView: View {
     
     var body: some View {
         TabView(selection: $selectedTab) {
-            LogActivityView()
-                .tabItem { Label("Record", systemImage: "plus.circle.fill") }
-                .tag("record")
+            NavigationStack {
+                FamilyStorefrontView()
+            }
+                .tabItem { Label("Store", systemImage: "storefront.fill") }
+                .tag("storefront")
             RuleCatalogView()
                 .tabItem { Label("Rules", systemImage: "list.bullet.rectangle") }
                 .tag("rules")

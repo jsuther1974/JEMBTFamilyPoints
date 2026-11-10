@@ -974,6 +974,7 @@ struct WeeklyLedgerView: View {
     @State private var reviewErrorMessage: String?
     @State private var sortDescriptors = PointsEngine.defaultLedgerSort
     @State private var editingSummary: LedgerSummary?
+    @State private var showingBulkCopy = false
 
     private var canReview: Bool {
         appleIDManager.currentMembership?.role.canReviewLedger == true
@@ -1061,6 +1062,14 @@ struct WeeklyLedgerView: View {
         .navigationTitle("Weekly Ledger")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if canReview {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Copy Week", systemImage: "doc.on.doc") {
+                        showingBulkCopy = true
+                    }
+                    .accessibilityIdentifier("copyLedgerWeek")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button("Reset Sort", systemImage: "arrow.up.arrow.down") {
                     sortDescriptors = PointsEngine.defaultLedgerSort
@@ -1075,6 +1084,13 @@ struct WeeklyLedgerView: View {
                 memberName: memberName(for: summary.memberID),
                 weekEnding: weekEnding,
                 canEdit: canReview
+            )
+        }
+        .sheet(isPresented: $showingBulkCopy) {
+            BulkCopyWeekView(
+                members: familyMembers,
+                entries: entries,
+                currentWeekEnding: PointsEngine.weekEnding(containing: .now)
             )
         }
         .safeAreaInset(edge: .top) {
@@ -1143,6 +1159,166 @@ struct WeeklyLedgerView: View {
         } catch {
             modelContext.rollback()
             reviewErrorMessage = "The review could not be saved: \(error.localizedDescription)"
+        }
+    }
+}
+
+private struct BulkCopyWeekView: View {
+    let members: [FamilyMember]
+    let entries: [LedgerEntry]
+    let currentWeekEnding: Date
+
+    @Environment(AppleIDManager.self) private var appleIDManager
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @State private var sourceWeekEnding: Date
+    @State private var selectedEntryIDs: Set<UUID> = []
+    @State private var errorMessage: String?
+
+    init(members: [FamilyMember], entries: [LedgerEntry], currentWeekEnding: Date) {
+        self.members = members
+        self.entries = entries
+        self.currentWeekEnding = currentWeekEnding
+        _sourceWeekEnding = State(initialValue: PointsEngine.previousWeekEnding(before: currentWeekEnding))
+    }
+
+    private var copyableEntries: [LedgerEntry] {
+        PointsEngine.copyableEntries(
+            weekEnding: sourceWeekEnding,
+            memberIDs: Set(members.filter(\.isActive).map(\.id)),
+            entries: entries
+        )
+    }
+
+    private var selectedEntries: [LedgerEntry] {
+        copyableEntries.filter { selectedEntryIDs.contains($0.id) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Copy from") {
+                    DatePicker(
+                        "Week ending",
+                        selection: $sourceWeekEnding,
+                        in: ...PointsEngine.previousWeekEnding(before: currentWeekEnding),
+                        displayedComponents: .date
+                    )
+                    .accessibilityIdentifier("copySourceWeek")
+                    Text("Approved rewards and fines are copied to the same weekdays in the current week ending \(currentWeekEnding.formatted(date: .abbreviated, time: .omitted)).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    if copyableEntries.isEmpty {
+                        ContentUnavailableView(
+                            "Nothing to Copy",
+                            systemImage: "doc.on.doc",
+                            description: Text("This week has no approved rewards or fines.")
+                        )
+                    } else {
+                        ForEach(copyableEntries) { entry in
+                            Toggle(isOn: selectionBinding(for: entry.id)) {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Text(entry.kind.activityEmoji)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(entry.title).fontWeight(.semibold)
+                                        Text("\(memberName(for: entry.memberID)) • \(PointsEngine.occurrenceDate(for: entry).formatted(.dateTime.weekday(.wide)))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Text(signed(entry.points))
+                                            .font(.caption.monospacedDigit())
+                                            .foregroundStyle(entry.points < 0 ? .red : .green)
+                                    }
+                                }
+                            }
+                            .accessibilityIdentifier("copyEntry-\(entry.id.uuidString)")
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("Items")
+                        Spacer()
+                        if !copyableEntries.isEmpty {
+                            Button(selectedEntryIDs.count == copyableEntries.count ? "Select None" : "Select All") {
+                                if selectedEntryIDs.count == copyableEntries.count {
+                                    selectedEntryIDs.removeAll()
+                                } else {
+                                    selectAll()
+                                }
+                            }
+                            .font(.caption)
+                        }
+                    }
+                }
+
+                if let errorMessage {
+                    Text(errorMessage).foregroundStyle(.red)
+                }
+            }
+            .navigationTitle("Copy Rewards & Fines")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add to Current Week", action: copyEntries)
+                        .disabled(selectedEntries.isEmpty)
+                        .accessibilityIdentifier("confirmCopyWeek")
+                }
+            }
+            .onAppear(perform: selectAll)
+            .onChange(of: sourceWeekEnding) {
+                let normalized = PointsEngine.weekEnding(containing: sourceWeekEnding)
+                if !Calendar.current.isDate(normalized, inSameDayAs: sourceWeekEnding) {
+                    sourceWeekEnding = normalized
+                } else {
+                    selectAll()
+                }
+            }
+        }
+    }
+
+    private func selectionBinding(for id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { selectedEntryIDs.contains(id) },
+            set: { selected in
+                if selected { selectedEntryIDs.insert(id) }
+                else { selectedEntryIDs.remove(id) }
+            }
+        )
+    }
+
+    private func selectAll() {
+        selectedEntryIDs = Set(copyableEntries.map(\.id))
+    }
+
+    private func memberName(for id: UUID) -> String {
+        members.first { $0.id == id }?.name ?? "Unknown"
+    }
+
+    private func signed(_ points: Int) -> String {
+        points > 0 ? "+\(points.formatted()) points" : "\(points.formatted()) points"
+    }
+
+    private func copyEntries() {
+        guard appleIDManager.currentMembership?.role.canReviewLedger == true,
+              !selectedEntries.isEmpty else { return }
+        let recorder = appleIDManager.currentFamilyMember?.name ?? "Parent"
+        let copies = PointsEngine.duplicateEntries(
+            selectedEntries,
+            toWeekEnding: currentWeekEnding,
+            submittedBy: recorder
+        )
+        copies.forEach(modelContext.insert)
+        do {
+            try modelContext.save()
+            dismiss()
+        } catch {
+            modelContext.rollback()
+            errorMessage = "The items could not be copied: \(error.localizedDescription)"
         }
     }
 }

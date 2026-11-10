@@ -902,6 +902,74 @@ final class PointsEngineTests: XCTestCase {
         XCTAssertEqual(sorted.map(\.title), ["Alpha", "Alpha", "Beta"])
     }
 
+    func testBulkCopyIncludesOnlyApprovedRewardsAndPenaltiesAndPreservesDetails() {
+        let child = FamilyMember(name: "Child", role: .child)
+        let sourceWeek = date(2026, 11, 7)
+        let targetWeek = date(2026, 11, 14)
+        let rewardRuleID = UUID()
+        let reward = LedgerEntry(
+            memberID: child.id,
+            ruleID: rewardRuleID,
+            occurredAt: date(2026, 11, 2),
+            weekEnding: sourceWeek,
+            title: "Reading",
+            notes: "Twenty minutes",
+            points: 125,
+            kind: .reward,
+            status: .approved,
+            submittedBy: "Parent",
+            quantity: 20,
+            measurementUnit: .minute,
+            riderTitle: "Extra effort"
+        )
+        let penalty = LedgerEntry(
+            memberID: child.id,
+            occurredAt: date(2026, 11, 6),
+            weekEnding: sourceWeek,
+            title: "Shouting",
+            notes: "After warning",
+            points: -50,
+            kind: .penalty,
+            status: .approved,
+            submittedBy: "Parent"
+        )
+        let purchase = LedgerEntry(memberID: child.id, weekEnding: sourceWeek, title: "Movie", points: -500, kind: .purchase, status: .approved, submittedBy: "Child")
+        let pending = LedgerEntry(memberID: child.id, weekEnding: sourceWeek, title: "Pending", points: 10, kind: .reward, status: .pending, submittedBy: "Child")
+        let rejected = LedgerEntry(memberID: child.id, weekEnding: sourceWeek, title: "Rejected", points: -10, kind: .penalty, status: .rejected, submittedBy: "Parent")
+        let otherMember = LedgerEntry(memberID: UUID(), weekEnding: sourceWeek, title: "Other family", points: 10, kind: .reward, status: .approved, submittedBy: "Parent")
+        let otherWeek = LedgerEntry(memberID: child.id, weekEnding: date(2026, 10, 31), title: "Other week", points: 10, kind: .reward, status: .approved, submittedBy: "Parent")
+
+        let copyable = PointsEngine.copyableEntries(
+            weekEnding: sourceWeek,
+            memberIDs: [child.id],
+            entries: [purchase, pending, rejected, otherMember, otherWeek, penalty, reward],
+            calendar: calendar
+        )
+        let copies = PointsEngine.duplicateEntries(
+            copyable,
+            toWeekEnding: targetWeek,
+            submittedBy: "Current Parent",
+            calendar: calendar
+        )
+
+        XCTAssertEqual(copyable.map(\.id), [reward.id, penalty.id])
+        XCTAssertEqual(copies.count, 2)
+        XCTAssertEqual(copies.map(\.occurredAt), [date(2026, 11, 9), date(2026, 11, 13)])
+        XCTAssertTrue(copies.allSatisfy { $0.weekEnding == targetWeek })
+        XCTAssertTrue(copies.allSatisfy { $0.memberID == child.id })
+        XCTAssertTrue(copies.allSatisfy { $0.status == .approved })
+        XCTAssertTrue(copies.allSatisfy { $0.submittedBy == "Current Parent" })
+        XCTAssertTrue(copies.allSatisfy { $0.reviewedBy == "Current Parent" && $0.reviewedAt != nil })
+        XCTAssertEqual(copies[0].ruleID, rewardRuleID)
+        XCTAssertEqual(copies[0].title, reward.title)
+        XCTAssertEqual(copies[0].notes, reward.notes)
+        XCTAssertEqual(copies[0].points, reward.points)
+        XCTAssertEqual(copies[0].quantity, reward.quantity)
+        XCTAssertEqual(copies[0].measurementUnitRawValue, RuleMeasurementUnit.minute.rawValue)
+        XCTAssertEqual(copies[0].riderTitle, reward.riderTitle)
+        XCTAssertEqual(copies[1].kind, .penalty)
+    }
+
     private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
         calendar.date(from: DateComponents(year: year, month: month, day: day))!
     }

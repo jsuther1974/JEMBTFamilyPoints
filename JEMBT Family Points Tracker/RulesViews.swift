@@ -45,7 +45,7 @@ struct RuleCatalogView: View {
     }
 }
 
-private struct RuleCatalogListView: View {
+struct RuleCatalogListView: View {
     let catalog: RuleCatalog
     @Environment(AppleIDManager.self) private var appleIDManager
     @Environment(\.modelContext) private var modelContext
@@ -61,8 +61,15 @@ private struct RuleCatalogListView: View {
 
     private var rules: [RuleTemplate] {
         guard let familyID = appleIDManager.currentFamily?.id else { return [] }
-        return allRules.filter {
+        let filtered = allRules.filter {
             $0.familyID == familyID && $0.catalog == catalog && (canEdit || $0.isEnabled)
+        }
+        guard catalog == .tradingPost else { return filtered }
+        return filtered.sorted {
+            if $0.storeShelfPosition != $1.storeShelfPosition {
+                return $0.storeShelfPosition < $1.storeShelfPosition
+            }
+            return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
         }
     }
 
@@ -99,11 +106,19 @@ private struct RuleCatalogListView: View {
                         }
                     }
                 }
+                .onMove { offsets, destination in
+                    moveStoreItems(from: offsets, to: destination)
+                }
             }
         }
         .navigationTitle(catalog.title)
         .toolbar {
             if canEdit {
+                if catalog == .tradingPost, !rules.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        EditButton()
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         showingAdd = true
@@ -142,7 +157,10 @@ private struct RuleCatalogListView: View {
             kind: catalog.entryKind,
             defaultPoints: draft.signedPoints(for: catalog)
         )
-        if rule == nil { modelContext.insert(target) }
+        if rule == nil {
+            target.storeShelfPosition = (rules.map(\.storeShelfPosition).max() ?? -1) + 1
+            modelContext.insert(target)
+        }
 
         target.familyID = familyID
         target.title = draft.title
@@ -162,12 +180,29 @@ private struct RuleCatalogListView: View {
         target.growthAmount = draft.growthAmount
         target.deductStartingPointsWhenMinimumMissed = draft.deductStartingPointsWhenMinimumMissed
         target.minimumPeriod = draft.minimumPeriod
+        target.storeInventoryLimit = draft.hasInventoryLimit ? draft.inventoryLimit : nil
+        target.storeInventoryPeriod = draft.inventoryPeriod
         target.warningUnits = 0
         target.acceleratorEnabled = false
         target.requiresApproval = true
-        target.isEnabled = true
+        target.isEnabled = draft.isEnabled
         try modelContext.save()
         errorMessage = nil
+    }
+
+    private func moveStoreItems(from offsets: IndexSet, to destination: Int) {
+        guard canEdit, catalog == .tradingPost else { return }
+        var reordered = rules
+        reordered.move(fromOffsets: offsets, toOffset: destination)
+        for (index, rule) in reordered.enumerated() {
+            rule.storeShelfPosition = index
+        }
+        do {
+            try modelContext.save()
+            errorMessage = nil
+        } catch {
+            errorMessage = "The shelf order could not be saved: \(error.localizedDescription)"
+        }
     }
 
     private func delete(_ rule: RuleTemplate) {
@@ -242,14 +277,21 @@ private struct RuleDetailView: View {
                 Section("Description") { Text(rule.guidance) }
             }
 
-            Section("How points are awarded") {
-                Text(rule.frequencyDescription)
-                Text("Point awards start on the \(ordinal(rule.firstAwardNumber)) award.")
-                if let lastAward = rule.lastAwardNumber {
-                    Text("Point awards end after award \(lastAward).")
+            if rule.catalog == .tradingPost {
+                Section("Store availability") {
+                    Text(rule.storeAvailabilityDescription)
+                    Text(rule.isEnabled ? "Visible in the Family Storefront" : "Hidden from the Family Storefront")
                 }
-                if rule.deductStartingPointsWhenMinimumMissed {
-                    Text("If the \(rule.minimumPeriod.title.lowercased()) minimum is missed, a parent can deduct \(abs(rule.defaultPoints).formatted()) points from the starting value.")
+            } else {
+                Section("How points are awarded") {
+                    Text(rule.frequencyDescription)
+                    Text("Point awards start on the \(ordinal(rule.firstAwardNumber)) award.")
+                    if let lastAward = rule.lastAwardNumber {
+                        Text("Point awards end after award \(lastAward).")
+                    }
+                    if rule.deductStartingPointsWhenMinimumMissed {
+                        Text("If the \(rule.minimumPeriod.title.lowercased()) minimum is missed, a parent can deduct \(abs(rule.defaultPoints).formatted()) points from the starting value.")
+                    }
                 }
             }
 
@@ -292,6 +334,25 @@ private struct RuleEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if catalog == .tradingPost {
+                    Section {
+                        Toggle("Available in the storefront", isOn: $draft.isEnabled)
+                        Toggle("Limit quantity", isOn: $draft.hasInventoryLimit)
+                        if draft.hasInventoryLimit {
+                            Stepper("Quantity: \(draft.inventoryLimit)", value: $draft.inventoryLimit, in: 1...10_000)
+                            Picker("Limit", selection: $draft.inventoryPeriod) {
+                                ForEach(StoreInventoryPeriod.allCases) { period in
+                                    Text(period.title).tag(period)
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("Availability")
+                    } footer: {
+                        Text("Daily stock resets at midnight, weekly stock resets each Sunday, and total stock does not reset.")
+                    }
+                }
+
                 Section {
                     Button {
                         showingIconPicker = true
@@ -327,6 +388,7 @@ private struct RuleEditorView: View {
                     Text(catalog.pointsHelp)
                 }
 
+                if catalog != .tradingPost {
                 Section {
                     Picker("Measure by", selection: $draft.frequencyKind) {
                         ForEach(RuleFrequencyKind.allCases) { kind in
@@ -444,6 +506,7 @@ private struct RuleEditorView: View {
                     Text("Should the point value grow?")
                 } footer: {
                     Text("For example, a 100% increase makes 100 points become 200, then 400, then 800. A 25-point increase makes 100 become 125, then 150, then 175.")
+                }
                 }
 
                 if let validationMessage {
@@ -563,6 +626,10 @@ private struct RuleDraft {
     var growthAmount: Double
     var deductStartingPointsWhenMinimumMissed: Bool
     var minimumPeriod: RuleMinimumPeriod
+    var isEnabled: Bool
+    var hasInventoryLimit: Bool
+    var inventoryLimit: Int
+    var inventoryPeriod: StoreInventoryPeriod
 
     @MainActor
     init(catalog: RuleCatalog, rule: RuleTemplate?, riders: [RuleRider]) {
@@ -586,6 +653,10 @@ private struct RuleDraft {
             : max(0, ((rule?.acceleratorMultiplier ?? 2) - 1) * 100)
         deductStartingPointsWhenMinimumMissed = rule?.deductStartingPointsWhenMinimumMissed ?? false
         minimumPeriod = rule?.minimumPeriod ?? .weekly
+        isEnabled = rule?.isEnabled ?? true
+        hasInventoryLimit = rule?.storeInventoryLimit != nil
+        inventoryLimit = max(1, rule?.storeInventoryLimit ?? 1)
+        inventoryPeriod = rule?.storeInventoryPeriod ?? .weekly
     }
 
     func signedPoints(for catalog: RuleCatalog) -> Int {
@@ -686,8 +757,20 @@ private extension RuleCatalog {
 
 private extension RuleTemplate {
     var pointSummary: String {
+        if catalog == .tradingPost {
+            return "\(abs(defaultPoints).formatted()) points • \(storeAvailabilityDescription)"
+        }
         let sign = defaultPoints > 0 ? "+" : ""
         return "\(sign)\(defaultPoints.formatted()) points • \(frequencyDescription)"
+    }
+
+    var storeAvailabilityDescription: String {
+        guard let storeInventoryLimit else { return "Unlimited stock" }
+        return switch storeInventoryPeriod {
+        case .daily: "\(storeInventoryLimit.formatted()) per day"
+        case .weekly: "\(storeInventoryLimit.formatted()) per week"
+        case .total: "\(storeInventoryLimit.formatted()) total"
+        }
     }
 
     var frequencyDescription: String {

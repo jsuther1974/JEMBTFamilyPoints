@@ -114,6 +114,30 @@ enum RuleMinimumPeriod: String, Codable, CaseIterable, Identifiable {
     var title: String { self == .weekly ? "Weekly" : "Monthly" }
 }
 
+enum StoreInventoryPeriod: String, Codable, CaseIterable, Identifiable {
+    case daily
+    case weekly
+    case total
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .daily: "Per Day"
+        case .weekly: "Per Week"
+        case .total: "Total Stock"
+        }
+    }
+
+    var remainingLabel: String {
+        switch self {
+        case .daily: "left today"
+        case .weekly: "left this week"
+        case .total: "left"
+        }
+    }
+}
+
 enum RuleGrowthKind: String, Codable, CaseIterable, Identifiable {
     case fixedPoints
     case percentage
@@ -227,6 +251,9 @@ final class RuleTemplate {
     var growthAmount: Double = 100
     var deductStartingPointsWhenMinimumMissed: Bool = false
     var minimumPeriodRawValue: String = RuleMinimumPeriod.weekly.rawValue
+    var storeInventoryLimit: Int?
+    var storeInventoryPeriodRawValue: String = StoreInventoryPeriod.weekly.rawValue
+    var storeShelfPosition: Int = 0
 
     var category: RuleCategory {
         get { RuleCategory(rawValue: categoryRawValue) ?? .household }
@@ -275,6 +302,11 @@ final class RuleTemplate {
     var minimumPeriod: RuleMinimumPeriod {
         get { RuleMinimumPeriod(rawValue: minimumPeriodRawValue) ?? .weekly }
         set { minimumPeriodRawValue = newValue.rawValue }
+    }
+
+    var storeInventoryPeriod: StoreInventoryPeriod {
+        get { StoreInventoryPeriod(rawValue: storeInventoryPeriodRawValue) ?? .weekly }
+        set { storeInventoryPeriodRawValue = newValue.rawValue }
     }
 
     var firstAwardNumber: Int {
@@ -337,7 +369,10 @@ final class RuleTemplate {
         growthKind: RuleGrowthKind = .percentage,
         growthAmount: Double = 100,
         deductStartingPointsWhenMinimumMissed: Bool = false,
-        minimumPeriod: RuleMinimumPeriod = .weekly
+        minimumPeriod: RuleMinimumPeriod = .weekly,
+        storeInventoryLimit: Int? = nil,
+        storeInventoryPeriod: StoreInventoryPeriod = .weekly,
+        storeShelfPosition: Int = 0
     ) {
         self.id = id
         self.familyID = familyID
@@ -365,6 +400,9 @@ final class RuleTemplate {
         self.growthAmount = growthAmount
         self.deductStartingPointsWhenMinimumMissed = deductStartingPointsWhenMinimumMissed
         self.minimumPeriodRawValue = minimumPeriod.rawValue
+        self.storeInventoryLimit = storeInventoryLimit
+        self.storeInventoryPeriodRawValue = storeInventoryPeriod.rawValue
+        self.storeShelfPosition = storeShelfPosition
     }
 
     func calculatedPoints(quantity: Double, riderMultiplier: Double = 1) -> Int {

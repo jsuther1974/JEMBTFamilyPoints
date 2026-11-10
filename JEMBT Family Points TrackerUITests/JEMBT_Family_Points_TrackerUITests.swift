@@ -21,22 +21,22 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
     }
 
     @MainActor
-    func testRecordActivityDetectsFreshFamilyAdminAsAdult() throws {
+    func testStorefrontReplacesRecordTabAndUsesFamilyName() throws {
         let app = XCUIApplication()
-        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-record-adult-\(UUID().uuidString)@local"
+        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-store-brand-\(UUID().uuidString)@local"
         app.launch()
 
         app.signInAndCreateFamilyForAddingMembers()
 
-        let recordTab = app.tabBars.buttons["Record"]
-        XCTAssertTrue(recordTab.waitForExistence(timeout: 5))
-        recordTab.tap()
+        let storeTab = app.tabBars.buttons["Store"]
+        XCTAssertTrue(storeTab.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.tabBars.buttons["Record"].exists)
+        storeTab.tap()
 
-        XCTAssertTrue(app.navigationBars["Record Activity"].waitForExistence(timeout: 5))
-        let accountType = app.staticTexts["submissionAccountType"]
-        XCTAssertTrue(accountType.waitForExistence(timeout: 5))
-        XCTAssertEqual(accountType.label, "Submitted by, Adult account")
-        XCTAssertFalse(app.switches["Submitted by a child"].exists)
+        XCTAssertTrue(app.navigationBars["UI Test Family"].waitForExistence(timeout: 5))
+        let sign = app.descendants(matching: .any)["storefrontSign"]
+        XCTAssertTrue(sign.waitForExistence(timeout: 5))
+        XCTAssertTrue(sign.label.contains("UI Test Family"))
     }
 
     @MainActor
@@ -47,6 +47,25 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         app.signInAndJoinDemoFamilyIfNeeded()
         app.openFamilyTab()
         app.assertCurrentMemberCannotInvite()
+    }
+
+    @MainActor
+    func testFamilyStorefrontOpensWithParentManagement() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        app.signInAndJoinDemoFamilyIfNeeded()
+        let storeTab = app.tabBars.buttons["Store"]
+        XCTAssertTrue(storeTab.waitForExistence(timeout: 5))
+        storeTab.tap()
+
+        XCTAssertTrue(app.buttons["Manage Items"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Manage the family store"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'points to spend'")).count, 0)
+        XCTAssertTrue(app.staticTexts["15 minutes extra screen time"].waitForExistence(timeout: 5))
+
+        app.openFamilyTab()
+        XCTAssertFalse(app.descendants(matching: .any)["familyStorefrontLink"].exists)
     }
 
     @MainActor
@@ -375,6 +394,14 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
         XCTAssertTrue(app.navigationBars["Weekly Ledger"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["weeklyLedgerHeader"].waitForExistence(timeout: 5))
+
+        let copyWeek = app.buttons["copyLedgerWeek"]
+        XCTAssertTrue(copyWeek.waitForExistence(timeout: 5))
+        copyWeek.tap()
+        XCTAssertTrue(app.navigationBars["Copy Rewards & Fines"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["copySourceWeek"].exists)
+        XCTAssertTrue(app.buttons["Cancel"].exists)
+        app.buttons["Cancel"].tap()
     }
 
     @MainActor

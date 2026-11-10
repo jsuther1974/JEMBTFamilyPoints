@@ -150,15 +150,15 @@ enum SeedData {
             rule("Bullying behavior", .behavior, .penalty, -50,
                  "Starts at -50 and doubles for repeated occurrences.", familyID: familyID, icon: "hand.raised.fill", accelerator: true),
             rule("15 minutes extra screen time", .rewardStore, .purchase, -100,
-                 "Prices double for successive 15-minute extensions.", familyID: familyID, icon: "display", unit: .fifteenMinutes, maximum: 4, accelerator: true),
+                 "Up to four extra 15-minute extensions are available each week.", familyID: familyID, icon: "display", unit: .fifteenMinutes, inventory: 4, inventoryPeriod: .weekly, shelfPosition: 0),
             rule("Download a new free game", .rewardStore, .purchase, -500,
-                 "Maximum once per week.", familyID: familyID, icon: "gamecontroller.fill", maximum: 1),
+                 "Maximum once per week.", familyID: familyID, icon: "gamecontroller.fill", maximum: 1, inventory: 1, inventoryPeriod: .weekly, shelfPosition: 1),
             rule("Extra sweet", .rewardStore, .purchase, -300,
-                 "Maximum once per week.", familyID: familyID, icon: "birthday.cake.fill", maximum: 1),
+                 "Maximum once per day.", familyID: familyID, icon: "birthday.cake.fill", maximum: 1, inventory: 1, inventoryPeriod: .daily, shelfPosition: 2),
             rule("Extra TV night", .rewardStore, .purchase, 0,
-                 "Set a price before enabling this prize.", familyID: familyID, icon: "tv.fill", enabled: false),
+                 "Set a price before enabling this prize.", familyID: familyID, icon: "tv.fill", enabled: false, shelfPosition: 3),
             rule("Choose weekly movie-night selection", .rewardStore, .purchase, 0,
-                 "Set a price before enabling this prize.", familyID: familyID, icon: "popcorn.fill", enabled: false)
+                 "Set a price before enabling this prize.", familyID: familyID, icon: "popcorn.fill", enabled: false, shelfPosition: 4)
         ]
     }
 
@@ -175,7 +175,10 @@ enum SeedData {
         maximum: Double? = nil,
         warnings: Int = 0,
         accelerator: Bool = false,
-        enabled: Bool = true
+        enabled: Bool = true,
+        inventory: Int? = nil,
+        inventoryPeriod: StoreInventoryPeriod = .weekly,
+        shelfPosition: Int = 0
     ) -> RuleTemplate {
         RuleTemplate(
             familyID: familyID,
@@ -198,7 +201,10 @@ enum SeedData {
             timeUnit: unit.timeUnit,
             growthEnabled: accelerator,
             growthKind: .percentage,
-            growthAmount: 100
+            growthAmount: 100,
+            storeInventoryLimit: inventory,
+            storeInventoryPeriod: inventoryPeriod,
+            storeShelfPosition: shelfPosition
         )
     }
 }

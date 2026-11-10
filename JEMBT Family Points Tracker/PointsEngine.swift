@@ -201,6 +201,64 @@ enum PointsEngine {
         }
     }
 
+    static func copyableEntries(
+        weekEnding: Date,
+        memberIDs: Set<UUID>,
+        entries: [LedgerEntry],
+        calendar: Calendar = .current
+    ) -> [LedgerEntry] {
+        entries
+            .filter {
+                memberIDs.contains($0.memberID) &&
+                $0.status == .approved &&
+                ($0.kind == .reward || $0.kind == .penalty) &&
+                calendar.isDate($0.weekEnding, inSameDayAs: weekEnding)
+            }
+            .sorted {
+                let lhsDate = occurrenceDate(for: $0, calendar: calendar)
+                let rhsDate = occurrenceDate(for: $1, calendar: calendar)
+                if lhsDate != rhsDate { return lhsDate < rhsDate }
+                if $0.memberID != $1.memberID { return $0.memberID.uuidString < $1.memberID.uuidString }
+                return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
+    }
+
+    static func duplicateEntries(
+        _ sourceEntries: [LedgerEntry],
+        toWeekEnding targetWeekEnding: Date,
+        submittedBy: String,
+        status: ApprovalStatus = .approved,
+        calendar: Calendar = .current
+    ) -> [LedgerEntry] {
+        let targetDatesByWeekday = Dictionary(
+            uniqueKeysWithValues: dates(inWeekEnding: targetWeekEnding, calendar: calendar).map {
+                (calendar.component(.weekday, from: $0), $0)
+            }
+        )
+        return sourceEntries.map { source in
+            let sourceDate = occurrenceDate(for: source, calendar: calendar)
+            let weekday = calendar.component(.weekday, from: sourceDate)
+            let targetDate = targetDatesByWeekday[weekday]!
+            return LedgerEntry(
+                memberID: source.memberID,
+                ruleID: source.ruleID,
+                occurredAt: targetDate,
+                weekEnding: calendar.startOfDay(for: targetWeekEnding),
+                title: source.title,
+                notes: source.notes,
+                points: source.points,
+                kind: source.kind,
+                status: status,
+                submittedBy: submittedBy,
+                reviewedBy: status == .approved ? submittedBy : nil,
+                reviewedAt: status == .approved ? .now : nil,
+                quantity: source.quantity,
+                measurementUnit: RuleMeasurementUnit(rawValue: source.measurementUnitRawValue) ?? .occurrence,
+                riderTitle: source.riderTitle
+            )
+        }
+    }
+
     @discardableResult
     static func applyReview(
         to entries: [LedgerEntry],
