@@ -37,6 +37,30 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         let sign = app.descendants(matching: .any)["storefrontSign"]
         XCTAssertTrue(sign.waitForExistence(timeout: 5))
         XCTAssertTrue(sign.label.contains("UI Test Family"))
+
+        let existingItem = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH '15 minutes extra screen time'")
+        ).firstMatch
+        XCTAssertTrue(existingItem.waitForExistence(timeout: 5))
+        existingItem.tap()
+        XCTAssertTrue(app.navigationBars["Edit Prize"].waitForExistence(timeout: 5))
+        let nameField = app.textFields["Name"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        nameField.tap()
+        nameField.typeText(" - Edited")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Edited'")).firstMatch.waitForExistence(timeout: 5))
+
+        let addItem = app.descendants(matching: .any)["addStoreItem"]
+        XCTAssertTrue(addItem.waitForExistence(timeout: 5))
+        addItem.tap()
+        XCTAssertTrue(app.navigationBars["New Prize"].waitForExistence(timeout: 5))
+        let newNameField = app.textFields["Name"]
+        XCTAssertTrue(newNameField.waitForExistence(timeout: 5))
+        newNameField.tap()
+        newNameField.typeText("Family Game")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Family Game'")).firstMatch.waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -59,10 +83,26 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(storeTab.waitForExistence(timeout: 5))
         storeTab.tap()
 
-        XCTAssertTrue(app.buttons["Manage Items"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Manage Items"].exists)
         XCTAssertTrue(app.staticTexts["Manage the family store"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'points to spend'")).count, 0)
         XCTAssertTrue(app.staticTexts["15 minutes extra screen time"].waitForExistence(timeout: 5))
+
+        let addItem = app.descendants(matching: .any)["addStoreItem"]
+        XCTAssertTrue(addItem.waitForExistence(timeout: 5))
+
+        let existingItem = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH '15 minutes extra screen time'")
+        ).firstMatch
+        XCTAssertTrue(existingItem.waitForExistence(timeout: 5))
+        existingItem.tap()
+        XCTAssertTrue(app.navigationBars["Edit Prize"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+
+        XCTAssertTrue(addItem.waitForExistence(timeout: 5))
+        addItem.tap()
+        XCTAssertTrue(app.navigationBars["New Prize"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
 
         app.openFamilyTab()
         XCTAssertFalse(app.descendants(matching: .any)["familyStorefrontLink"].exists)
@@ -415,7 +455,9 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(rulesTab.waitForExistence(timeout: 5), "Expected Rules to be a direct tab.")
         rulesTab.tap()
 
-        for title in ["Earn Points", "Lose Points", "Rewards Shop"] {
+        XCTAssertFalse(app.staticTexts["Rewards Shop"].exists)
+
+        for title in ["Earn Points", "Lose Points"] {
             let catalog = app.staticTexts[title]
             XCTAssertTrue(catalog.waitForExistence(timeout: 5))
             catalog.tap()

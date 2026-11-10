@@ -62,10 +62,12 @@ struct FamilyStorefrontView: View {
     @Query private var allEntries: [LedgerEntry]
     @Query private var allSettlements: [WeeklySettlement]
     @State private var pendingPurchase: RuleTemplate?
+    @State private var editingRule: RuleTemplate?
+    @State private var showingAddItem = false
     @State private var errorMessage: String?
     @State private var purchaseMessage: String?
 
-    private let columns = [GridItem(.adaptive(minimum: 155), spacing: 18)]
+    private let columns = [GridItem(.adaptive(minimum: 96), spacing: 10)]
 
     private var familyID: UUID? { appleIDManager.currentFamily?.id }
     private var storeName: String { StorefrontEngine.storeName(for: appleIDManager.currentFamily?.name) }
@@ -93,7 +95,9 @@ struct FamilyStorefrontView: View {
 
     private var storeItems: [RuleTemplate] {
         allRules.filter {
-            $0.familyID == familyID && $0.catalog == .tradingPost && $0.isEnabled
+            $0.familyID == familyID &&
+            $0.catalog == .tradingPost &&
+            (canManage || $0.isEnabled)
         }.sorted {
             if $0.storeShelfPosition != $1.storeShelfPosition {
                 return $0.storeShelfPosition < $1.storeShelfPosition
@@ -125,27 +129,38 @@ struct FamilyStorefrontView: View {
             VStack(spacing: 0) {
                 StoreAwningView()
 
-                VStack(spacing: 22) {
+                VStack(spacing: 14) {
                     storeSign
                     balanceHeader
 
-                    if storeItems.isEmpty {
+                    if storeItems.isEmpty && !canManage {
                         ContentUnavailableView(
                             "The Store Is Empty",
                             systemImage: "shippingbox",
-                            description: Text(canManage ? "Use Manage Items to stock the shelves." : "A parent can add rewards soon.")
+                            description: Text("A parent can add rewards soon.")
                         )
                         .padding(.vertical, 40)
                     } else {
-                        LazyVGrid(columns: columns, spacing: 24) {
+                        LazyVGrid(columns: columns, spacing: 14) {
                             ForEach(storeItems) { item in
                                 StoreShelfItemView(
                                     item: item,
                                     remaining: StorefrontEngine.remainingQuantity(for: item, entries: familyEntries),
                                     balance: currentChild == nil ? nil : balance,
-                                    canPurchase: canPurchase
+                                    canPurchase: canPurchase,
+                                    canEdit: canManage
                                 ) {
-                                    pendingPurchase = item
+                                    if canManage {
+                                        editingRule = item
+                                    } else {
+                                        pendingPurchase = item
+                                    }
+                                }
+                            }
+
+                            if canManage {
+                                AddStoreItemView {
+                                    showingAddItem = true
                                 }
                             }
                         }
@@ -170,16 +185,21 @@ struct FamilyStorefrontView: View {
         )
         .navigationTitle(storeName)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if canManage {
-                ToolbarItem(placement: .primaryAction) {
-                    NavigationLink {
-                        RuleCatalogListView(catalog: .tradingPost)
-                    } label: {
-                        Label("Manage Items", systemImage: "slider.horizontal.3")
-                    }
-                }
+        .sheet(isPresented: $showingAddItem) {
+            RuleEditorView(catalog: .tradingPost) { draft in
+                try save(draft, replacing: nil)
             }
+            .presentationDetents([.large])
+            .presentationCornerRadius(28)
+            .presentationBackground(.regularMaterial)
+        }
+        .sheet(item: $editingRule) { item in
+            RuleEditorView(catalog: .tradingPost, rule: item) { draft in
+                try save(draft, replacing: item)
+            }
+            .presentationDetents([.large])
+            .presentationCornerRadius(28)
+            .presentationBackground(.regularMaterial)
         }
         .confirmationDialog(
             "Buy \(pendingPurchase?.title ?? "this reward")?",
@@ -316,6 +336,50 @@ struct FamilyStorefrontView: View {
             errorMessage = "The purchase could not be completed: \(error.localizedDescription)"
         }
     }
+
+    private func save(_ draft: RuleDraft, replacing rule: RuleTemplate?) throws {
+        guard canManage, let familyID else {
+            throw RuleEditingError.notAuthorized
+        }
+
+        let target = rule ?? RuleTemplate(
+            familyID: familyID,
+            title: draft.title,
+            category: draft.category,
+            kind: RuleCatalog.tradingPost.entryKind,
+            defaultPoints: draft.signedPoints(for: .tradingPost)
+        )
+        if rule == nil {
+            target.storeShelfPosition = (storeItems.map(\.storeShelfPosition).max() ?? -1) + 1
+            modelContext.insert(target)
+        }
+
+        target.familyID = familyID
+        target.title = draft.title
+        target.category = draft.category
+        target.kind = RuleCatalog.tradingPost.entryKind
+        target.defaultPoints = draft.signedPoints(for: .tradingPost)
+        target.guidance = draft.details
+        target.iconName = draft.iconName
+        target.frequencyKind = draft.frequencyKind
+        target.countSchedule = draft.countSchedule
+        target.frequencyValue = Double(draft.frequencyCount)
+        target.timeUnit = draft.timeUnit
+        target.minimumTarget = Double(draft.firstAward)
+        target.maximumTarget = draft.hasLastAward ? Double(draft.lastAward) : nil
+        target.growthEnabled = draft.growthEnabled
+        target.growthKind = draft.growthKind
+        target.growthAmount = draft.growthAmount
+        target.deductStartingPointsWhenMinimumMissed = draft.deductStartingPointsWhenMinimumMissed
+        target.minimumPeriod = draft.minimumPeriod
+        target.storeInventoryLimit = draft.hasInventoryLimit ? draft.inventoryLimit : nil
+        target.storeInventoryPeriod = draft.inventoryPeriod
+        target.warningUnits = 0
+        target.acceleratorEnabled = false
+        target.requiresApproval = true
+        target.isEnabled = draft.isEnabled
+        try modelContext.save()
+    }
 }
 
 private struct StoreAwningView: View {
@@ -369,19 +433,20 @@ private struct StoreShelfItemView: View {
     let remaining: Int?
     let balance: Int?
     let canPurchase: Bool
-    let onPurchase: () -> Void
+    let canEdit: Bool
+    let onSelect: () -> Void
 
     private var soldOut: Bool { remaining == 0 }
     private var affordable: Bool {
         balance.map { StorefrontEngine.canAfford(item, balance: $0) } ?? true
     }
-    private var purchasable: Bool { canPurchase && affordable && !soldOut }
+    private var purchasable: Bool { canPurchase && item.isEnabled && affordable && !soldOut }
     private var dimmedForChild: Bool { canPurchase && !affordable && !soldOut }
 
     var body: some View {
-        Button(action: onPurchase) {
+        Button(action: onSelect) {
             VStack(spacing: 0) {
-                VStack(spacing: 10) {
+                VStack(spacing: 5) {
                     ZStack(alignment: .bottom) {
                         RoundedRectangle(cornerRadius: 14)
                             .fill(
@@ -394,16 +459,16 @@ private struct StoreShelfItemView: View {
                             .overlay(alignment: .topLeading) {
                                 Capsule()
                                     .fill(.white.opacity(0.7))
-                                    .frame(width: 38, height: 5)
+                                    .frame(width: 24, height: 3)
                                     .rotationEffect(.degrees(-35))
-                                    .padding(10)
+                                    .padding(6)
                             }
 
                         Ellipse()
                             .fill(.black.opacity(0.12))
-                            .frame(width: 72, height: 13)
+                            .frame(width: 42, height: 8)
                             .blur(radius: 2)
-                            .padding(.bottom, 10)
+                            .padding(.bottom, 6)
 
                         Image(systemName: item.iconName)
                             .symbolRenderingMode(.palette)
@@ -411,37 +476,41 @@ private struct StoreShelfItemView: View {
                                 purchasable || !canPurchase ? Color.purple : Color.secondary,
                                 purchasable || !canPurchase ? Color.orange : Color.gray
                             )
-                            .font(.system(size: 52, weight: .semibold))
+                            .font(.system(size: 31, weight: .semibold))
                             .shadow(color: .black.opacity(0.24), radius: 3, y: 4)
-                            .padding(.bottom, 18)
+                            .padding(.bottom, 10)
                     }
-                    .frame(height: 112)
+                    .frame(height: 66)
 
                     ZStack {
-                        VStack(spacing: 5) {
+                        VStack(spacing: 2) {
                             Text(item.title)
-                                .font(.headline)
+                                .font(.caption2.weight(.semibold))
                                 .multilineTextAlignment(.center)
                                 .lineLimit(2)
                             Text("\(abs(item.defaultPoints).formatted()) points")
-                                .font(.subheadline.bold())
+                                .font(.caption2.bold())
                                 .foregroundStyle(.purple)
                             if let remaining {
                                 Text("\(remaining) \(item.storeInventoryPeriod.remainingLabel)")
-                                    .font(.caption)
+                                    .font(.system(size: 8))
                                     .foregroundStyle(.secondary)
                             } else {
                                 Text("Available")
-                                    .font(.caption)
+                                    .font(.system(size: 8))
                                     .foregroundStyle(.secondary)
                             }
                             if let balance, !affordable && !soldOut {
                                 Text("Need \((abs(item.defaultPoints) - balance).formatted()) more")
-                                    .font(.caption2.bold())
+                                    .font(.system(size: 8, weight: .bold))
+                            } else if canEdit, !item.isEnabled {
+                                Text("Hidden")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundStyle(.orange)
                             }
                         }
-                        .padding(10)
-                        .frame(maxWidth: .infinity, minHeight: 112)
+                        .padding(5)
+                        .frame(maxWidth: .infinity, minHeight: 64)
                         .background(Color(red: 1, green: 0.98, blue: 0.84), in: RoundedRectangle(cornerRadius: 6))
                         .overlay {
                             RoundedRectangle(cornerRadius: 6)
@@ -450,17 +519,17 @@ private struct StoreShelfItemView: View {
 
                         if soldOut {
                             Text("SOLD OUT")
-                                .font(.headline.weight(.black))
+                                .font(.caption2.weight(.black))
                                 .foregroundStyle(.white)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
                                 .background(.red, in: RoundedRectangle(cornerRadius: 5))
                                 .rotationEffect(.degrees(-9))
                                 .shadow(radius: 2)
                         }
                     }
                 }
-                .padding(12)
+                .padding(6)
                 .frame(maxWidth: .infinity)
                 .background(
                     purchasable
@@ -476,7 +545,7 @@ private struct StoreShelfItemView: View {
                 ZStack(alignment: .top) {
                     RoundedRectangle(cornerRadius: 3)
                         .fill(LinearGradient(colors: [.brown, Color(red: 0.28, green: 0.12, blue: 0.04)], startPoint: .top, endPoint: .bottom))
-                        .frame(height: 14)
+                        .frame(height: 8)
                         .shadow(color: .black.opacity(0.4), radius: 3, y: 4)
                     Rectangle()
                         .fill(.white.opacity(0.3))
@@ -484,15 +553,44 @@ private struct StoreShelfItemView: View {
                 }
                 .padding(.horizontal, -6)
             }
-            .grayscale(dimmedForChild ? 1 : 0)
-            .opacity(dimmedForChild ? 0.48 : 1)
-            .shadow(color: purchasable ? .yellow.opacity(0.9) : .clear, radius: 14)
+            .grayscale(dimmedForChild || (!item.isEnabled && canEdit) ? 1 : 0)
+            .opacity(dimmedForChild || (!item.isEnabled && canEdit) ? 0.48 : 1)
+            .shadow(color: purchasable ? .yellow.opacity(0.9) : .clear, radius: 8)
         }
         .buttonStyle(.plain)
-        .disabled(!purchasable)
+        .disabled(!canEdit && !purchasable)
         .accessibilityLabel("\(item.title), \(abs(item.defaultPoints)) points")
-        .accessibilityValue(soldOut ? "Sold out" : affordable ? "Available to buy" : "Cannot afford")
-        .accessibilityHint(purchasable ? "Double tap to purchase" : "")
+        .accessibilityValue(!item.isEnabled ? "Hidden from children" : soldOut ? "Sold out" : affordable ? "Available to buy" : "Cannot afford")
+        .accessibilityHint(canEdit ? "Double tap to edit" : purchasable ? "Double tap to purchase" : "")
         .accessibilityIdentifier("storeItem-\(item.id.uuidString)")
+    }
+}
+
+private struct AddStoreItemView: View {
+    let onAdd: () -> Void
+
+    var body: some View {
+        Button(action: onAdd) {
+            VStack(spacing: 8) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 34, weight: .semibold))
+                    .foregroundStyle(.purple)
+                Text("Add item")
+                    .font(.caption2.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity, minHeight: 138)
+            .background(.white.opacity(0.34), in: RoundedRectangle(cornerRadius: 16))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(.purple.opacity(0.45), style: StrokeStyle(lineWidth: 1.5, dash: [5]))
+            }
+            .overlay(alignment: .bottom) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(LinearGradient(colors: [.brown, Color(red: 0.28, green: 0.12, blue: 0.04)], startPoint: .top, endPoint: .bottom))
+                    .frame(height: 8)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("addStoreItem")
     }
 }

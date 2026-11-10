@@ -11,7 +11,7 @@ struct RuleCatalogView: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(RuleCatalog.allCases) { catalog in
+                ForEach(RuleCatalog.allCases.filter { $0 != .tradingPost }) { catalog in
                     NavigationLink {
                         RuleCatalogListView(catalog: catalog)
                     } label: {
@@ -312,7 +312,7 @@ private struct RuleDetailView: View {
     }
 }
 
-private struct RuleEditorView: View {
+struct RuleEditorView: View {
     let catalog: RuleCatalog
     let onSave: (RuleDraft) throws -> Void
     @Environment(\.dismiss) private var dismiss
@@ -607,7 +607,7 @@ private struct RuleIconPicker: View {
     }
 }
 
-private struct RuleDraft {
+struct RuleDraft {
     var isExisting: Bool
     var title: String
     var details: String
@@ -713,7 +713,7 @@ private struct RuleSymbol: Identifiable {
     ]
 }
 
-private enum RuleEditingError: LocalizedError {
+enum RuleEditingError: LocalizedError {
     case notAuthorized
 
     var errorDescription: String? {
