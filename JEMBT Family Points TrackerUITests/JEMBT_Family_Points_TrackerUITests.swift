@@ -392,6 +392,9 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(advocateRows.count, 2)
         XCTAssertTrue(advocateRows.firstMatch.label.localizedCaseInsensitiveContains("recorded by"))
         XCTAssertTrue(app.descendants(matching: .any)["ledgerSummary-Mateo-Read to or with family"].waitForExistence(timeout: 5))
+        let approvedStatus = app.descendants(matching: .any).matching(identifier: "ledgerStatus-Mateo-Advocate Award").firstMatch
+        XCTAssertTrue(approvedStatus.waitForExistence(timeout: 5))
+        XCTAssertEqual(approvedStatus.label, "Approved")
 
         let itemSort = app.buttons["ledgerSort-item"]
         let typeSort = app.buttons["ledgerSort-type"]
@@ -411,6 +414,16 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'Mommy' OR label CONTAINS[c] 'Parent'")).firstMatch.exists)
         app.navigationBars["Edit Ledger Item"].buttons["Cancel"].tap()
 
+        let readingRow = app.descendants(matching: .any)
+            .matching(identifier: "ledgerSummary-Mateo-Read to or with family")
+            .firstMatch
+        readingRow.doubleTap()
+        XCTAssertTrue(app.navigationBars["Edit Ledger Item"].waitForExistence(timeout: 5))
+        let typedQuantity = app.descendants(matching: .any)["ledgerQuantity"]
+        XCTAssertTrue(typedQuantity.waitForExistence(timeout: 5))
+        XCTAssertTrue(typedQuantity.label.localizedCaseInsensitiveContains("minute"))
+        app.navigationBars["Edit Ledger Item"].buttons["Cancel"].tap()
+
         app.navigationBars["Weekly Ledger"].buttons.firstMatch.tap()
         let penalizeDaddy = app.buttons["Penalize Daddy"]
         for _ in 0..<5 where !penalizeDaddy.exists {
@@ -418,6 +431,25 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         }
         XCTAssertTrue(penalizeDaddy.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Reward Daddy"].exists)
+    }
+
+    @MainActor
+    func testFamilyStatisticsPageIsAvailableWithoutAddingASixthTab() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        app.signInAndJoinDemoFamilyIfNeeded()
+
+        XCTAssertEqual(app.tabBars.buttons.count, 5)
+        let statsLink = app.descendants(matching: .any)["familyStatisticsLink"]
+        XCTAssertTrue(statsLink.waitForExistence(timeout: 5))
+        statsLink.tap()
+
+        XCTAssertTrue(app.navigationBars["Stats & Trends"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["familyStatisticsPage"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["statsWeeklyTrendChart"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["statsYearChart"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["statsProjectionChart"].exists)
     }
 
     @MainActor
@@ -434,6 +466,14 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
         XCTAssertTrue(app.navigationBars["Weekly Ledger"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["weeklyLedgerHeader"].waitForExistence(timeout: 5))
+
+        let leadingColumns = ["type", "status", "day", "person", "item"].map {
+            app.buttons["ledgerSort-\($0)"]
+        }
+        leadingColumns.forEach { XCTAssertTrue($0.waitForExistence(timeout: 5)) }
+        for (left, right) in zip(leadingColumns, leadingColumns.dropFirst()) {
+            XCTAssertLessThan(left.frame.minX, right.frame.minX)
+        }
 
         let copyWeek = app.buttons["copyLedgerWeek"]
         XCTAssertTrue(copyWeek.waitForExistence(timeout: 5))

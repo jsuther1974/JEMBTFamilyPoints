@@ -93,6 +93,15 @@ struct ManageFamilyView: View {
                 }
             }
 
+            Section("Family insights") {
+                NavigationLink {
+                    FamilyStatisticsView()
+                } label: {
+                    Label("Stats & Trends", systemImage: "chart.xyaxis.line")
+                }
+                .accessibilityIdentifier("familyStatisticsLink")
+            }
+
             Section("Pending approval") {
                 NavigationLink {
                     WeeklyLedgerView(weekEnding: weekEnding)
@@ -120,6 +129,22 @@ struct ManageFamilyView: View {
                 memberSection(title: "Parents", role: .parent)
                 memberSection(title: "Caregivers", role: .caregiver)
             }
+        }
+        .scrollContentBackground(.hidden)
+        .background {
+            GeometryReader { proxy in
+                Image("FamilyPageWallpaper")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipped()
+                    .overlay {
+                        Rectangle()
+                            .fill(.ultraThinMaterial)
+                    }
+            }
+            .ignoresSafeArea()
+            .accessibilityHidden(true)
         }
         .navigationTitle(displayedFamilyName)
         .navigationBarTitleDisplayMode(.large)
@@ -1041,9 +1066,7 @@ struct WeeklyLedgerView: View {
                                     canReview: canReview,
                                     onEdit: { editingSummary = summary },
                                     onApproveItem: { review(summary, as: .approved) },
-                                    onRejectItem: { review(summary, as: .rejected) },
-                                    onApproveAll: { reviewAll(as: .approved) },
-                                    onRejectAll: { reviewAll(as: .rejected) }
+                                    onRejectItem: { review(summary, as: .rejected) }
                                 )
                             }
                         } header: {
@@ -1062,6 +1085,19 @@ struct WeeklyLedgerView: View {
         .navigationTitle("Weekly Ledger")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if canReview && !pendingEntriesForWeek.isEmpty {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu("Review All", systemImage: "checklist") {
+                        Button("Approve all waiting", systemImage: "checkmark.circle.fill") {
+                            reviewAll(as: .approved)
+                        }
+                        Button("Reject all waiting", systemImage: "xmark.circle.fill", role: .destructive) {
+                            reviewAll(as: .rejected)
+                        }
+                    }
+                    .accessibilityIdentifier("reviewAllLedger")
+                }
+            }
             if canReview {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Copy Week", systemImage: "doc.on.doc") {
@@ -1330,14 +1366,11 @@ private enum WeeklyLedgerColumns {
     static let day: CGFloat = 72
     static let recordedBy: CGFloat = 110
     static let count: CGFloat = 42
-    static let recordCount: CGFloat = 56
     static let points: CGFloat = 72
-    static let recordPoints: CGFloat = 78
     static let next: CGFloat = 64
-    static let status: CGFloat = 150
-    static let review: CGFloat = 150
+    static let status: CGFloat = 44
     static let spacing: CGFloat = 8
-    static let tableWidth = type + item + person + day + recordedBy + count + recordCount + points + recordPoints + next + status + review + spacing * 11
+    static let tableWidth = type + status + day + person + item + recordedBy + count + points + next + spacing * 8
 }
 
 private struct WeeklyLedgerHeader: View {
@@ -1347,16 +1380,13 @@ private struct WeeklyLedgerHeader: View {
     var body: some View {
         HStack(spacing: WeeklyLedgerColumns.spacing) {
             header("Type", .type, width: WeeklyLedgerColumns.type)
-            header("Item", .item, width: WeeklyLedgerColumns.item, alignment: .leading)
-            header("Status", .status, width: WeeklyLedgerColumns.status, alignment: .leading)
-            Text("Review").frame(width: WeeklyLedgerColumns.review)
-            header("Person", .person, width: WeeklyLedgerColumns.person, alignment: .leading)
+            header("Status", .status, width: WeeklyLedgerColumns.status)
             header("Day", .day, width: WeeklyLedgerColumns.day, alignment: .leading)
+            header("Receiver", .person, width: WeeklyLedgerColumns.person, alignment: .leading)
+            header("Item", .item, width: WeeklyLedgerColumns.item, alignment: .leading)
             header("Recorded by", .recordedBy, width: WeeklyLedgerColumns.recordedBy, alignment: .leading)
             header("#", .count, width: WeeklyLedgerColumns.count, alignment: .trailing)
-            header("Max #", .recordCount, width: WeeklyLedgerColumns.recordCount, alignment: .trailing)
             header("Week", .points, width: WeeklyLedgerColumns.points, alignment: .trailing)
-            header("Record", .recordPoints, width: WeeklyLedgerColumns.recordPoints, alignment: .trailing)
             header("Next", .next, width: WeeklyLedgerColumns.next, alignment: .trailing)
         }
         .font(.caption2.bold())
@@ -1406,20 +1436,18 @@ private struct WeeklyLedgerStartingRow: View {
             Image(systemName: "flag.checkered")
                 .foregroundStyle(.secondary)
                 .frame(width: WeeklyLedgerColumns.type)
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .frame(width: WeeklyLedgerColumns.status)
+                .accessibilityLabel("Approved")
+            placeholder(width: WeeklyLedgerColumns.day)
+            Text(memberName).frame(width: WeeklyLedgerColumns.person, alignment: .leading)
             Text("Starting value")
                 .fontWeight(.semibold)
                 .frame(width: WeeklyLedgerColumns.item, alignment: .leading)
-            Text("Approved")
-                .foregroundStyle(.green)
-                .frame(width: WeeklyLedgerColumns.status, alignment: .leading)
-            placeholder(width: WeeklyLedgerColumns.review)
-            Text(memberName).frame(width: WeeklyLedgerColumns.person, alignment: .leading)
-            placeholder(width: WeeklyLedgerColumns.day)
             placeholder(width: WeeklyLedgerColumns.recordedBy)
             placeholder(width: WeeklyLedgerColumns.count)
-            placeholder(width: WeeklyLedgerColumns.recordCount)
             Text(signed(points)).frame(width: WeeklyLedgerColumns.points, alignment: .trailing)
-            placeholder(width: WeeklyLedgerColumns.recordPoints)
             placeholder(width: WeeklyLedgerColumns.next)
         }
         .font(.caption)
@@ -1445,14 +1473,19 @@ private struct WeeklyLedgerRow: View {
     let onEdit: () -> Void
     let onApproveItem: () -> Void
     let onRejectItem: () -> Void
-    let onApproveAll: () -> Void
-    let onRejectAll: () -> Void
 
     var body: some View {
         HStack(spacing: WeeklyLedgerColumns.spacing) {
             Text(summary.kind.activityEmoji)
                 .frame(width: WeeklyLedgerColumns.type)
                 .accessibilityHidden(true)
+            statusControl
+                .frame(width: WeeklyLedgerColumns.status)
+            Text(summary.occurredAt.formatted(.dateTime.weekday(.abbreviated)))
+                .frame(width: WeeklyLedgerColumns.day, alignment: .leading)
+            Text(memberName)
+                .lineLimit(1)
+                .frame(width: WeeklyLedgerColumns.person, alignment: .leading)
             HStack(spacing: 5) {
                 Image(systemName: summary.hasPendingEntries ? "clock.fill" : summary.iconName)
                     .foregroundStyle(summary.hasPendingEntries ? .orange : (summary.kind == .penalty ? .indigo : .green))
@@ -1461,49 +1494,14 @@ private struct WeeklyLedgerRow: View {
                     .lineLimit(1)
             }
             .frame(width: WeeklyLedgerColumns.item, alignment: .leading)
-            Label(statusText, systemImage: statusIcon)
-                .lineLimit(1)
-                .foregroundStyle(statusColor)
-                .frame(width: WeeklyLedgerColumns.status, alignment: .leading)
-                .accessibilityIdentifier("ledgerStatus-\(memberName)-\(summary.title)")
-            if canReview && summary.hasPendingEntries {
-                HStack(spacing: 5) {
-                    Menu("Reject") {
-                        Button("This item", role: .destructive, action: onRejectItem)
-                        Button("All pending this week", role: .destructive, action: onRejectAll)
-                    }
-                    .accessibilityIdentifier("rejectLedger-\(memberName)-\(summary.title)")
-                    Menu("Approve") {
-                        Button("This item", action: onApproveItem)
-                        Button("All pending this week", action: onApproveAll)
-                    }
-                    .accessibilityIdentifier("approveLedger-\(memberName)-\(summary.title)")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .frame(width: WeeklyLedgerColumns.review)
-            } else {
-                Text("—")
-                    .foregroundStyle(.tertiary)
-                    .frame(width: WeeklyLedgerColumns.review)
-            }
-            Text(memberName)
-                .lineLimit(1)
-                .frame(width: WeeklyLedgerColumns.person, alignment: .leading)
-            Text(summary.occurredAt.formatted(.dateTime.weekday(.abbreviated)))
-                .frame(width: WeeklyLedgerColumns.day, alignment: .leading)
             Text(summary.submittedBy.isEmpty ? "Unknown" : summary.submittedBy)
                 .lineLimit(1)
                 .frame(width: WeeklyLedgerColumns.recordedBy, alignment: .leading)
             Text(summary.weeklyCount.formatted())
                 .frame(width: WeeklyLedgerColumns.count, alignment: .trailing)
-            Text(summary.recordWeeklyCount.formatted())
-                .frame(width: WeeklyLedgerColumns.recordCount, alignment: .trailing)
             Text(signed(summary.weeklyPoints))
                 .fontWeight(.semibold)
                 .frame(width: WeeklyLedgerColumns.points, alignment: .trailing)
-            Text(signed(summary.recordWeeklyPoints))
-                .frame(width: WeeklyLedgerColumns.recordPoints, alignment: .trailing)
             Text(summary.nextPoints.map(signed) ?? "—")
                 .frame(width: WeeklyLedgerColumns.next, alignment: .trailing)
         }
@@ -1518,7 +1516,6 @@ private struct WeeklyLedgerRow: View {
             "\(summary.kind == .reward ? "Reward" : "Penalty"), \(summary.title), \(memberName), " +
             "\(summary.occurredAt.formatted(.dateTime.weekday(.wide))), recorded by \(summary.submittedBy), " +
             "\(summary.weeklyCount) this week, \(signed(summary.weeklyPoints)) points, " +
-            "record \(summary.recordWeeklyCount) times and \(signed(summary.recordWeeklyPoints)) points, " +
             "next \(summary.nextPoints.map(signed) ?? "not available")" +
             ", \(statusText)"
         )
@@ -1527,6 +1524,27 @@ private struct WeeklyLedgerRow: View {
 
     private func signed(_ value: Int) -> String {
         value > 0 ? "+\(value.formatted())" : value.formatted()
+    }
+
+    @ViewBuilder
+    private var statusControl: some View {
+        if canReview && summary.hasPendingEntries {
+            Menu {
+                Button("Leave Waiting", systemImage: "clock.fill") {}
+                Button("Approve", systemImage: "checkmark.circle.fill", action: onApproveItem)
+                Button("Reject", systemImage: "xmark.circle.fill", role: .destructive, action: onRejectItem)
+            } label: {
+                Image(systemName: statusIcon)
+                    .foregroundStyle(statusColor)
+            }
+            .accessibilityLabel(statusText)
+            .accessibilityIdentifier("ledgerStatus-\(memberName)-\(summary.title)")
+        } else {
+            Image(systemName: statusIcon)
+                .foregroundStyle(statusColor)
+                .accessibilityLabel(statusText)
+                .accessibilityIdentifier("ledgerStatus-\(memberName)-\(summary.title)")
+        }
     }
 
     private var statusText: String {
@@ -1544,7 +1562,7 @@ private struct WeeklyLedgerRow: View {
     }
 
     private var statusIcon: String {
-        if summary.pendingCount > 0 { return "exclamationmark.circle.fill" }
+        if summary.pendingCount > 0 { return "clock.fill" }
         if summary.approvedCount > 0 { return "checkmark.circle.fill" }
         return "xmark.circle.fill"
     }
@@ -1600,7 +1618,14 @@ private struct LedgerEntryEditorView: View {
                         displayedComponents: .date
                     )
                     Stepper("Total points: \(totalPoints)", value: $totalPoints, in: -100_000...100_000)
-                    Stepper("Total quantity: \(totalQuantity.formatted())", value: $totalQuantity, in: 1...100_000, step: 1)
+                    Stepper(quantityDescription, value: $totalQuantity, in: 1...100_000, step: 1)
+                        .disabled(hasMixedMeasurementUnits)
+                        .accessibilityIdentifier("ledgerQuantity")
+                    if hasMixedMeasurementUnits {
+                        Label("These records use different quantity units. Edit them separately to change quantity.", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                     TextField("Notes", text: $notes, axis: .vertical)
                         .lineLimit(2...5)
                 }
@@ -1645,6 +1670,19 @@ private struct LedgerEntryEditorView: View {
         return statuses.count == 1 ? statuses.first?.capitalized ?? "Unknown" : "Mixed"
     }
 
+    private var quantityDescription: String {
+        let units = Set(entries.map(\.measurementUnitRawValue))
+        guard units.count == 1, let rawValue = units.first,
+              let unit = RuleMeasurementUnit(rawValue: rawValue) else {
+            return "Total quantity: \(totalQuantity.formatted()) (mixed units)"
+        }
+        return "Total quantity: \(totalQuantity.formatted()) \(unit.label(for: totalQuantity))"
+    }
+
+    private var hasMixedMeasurementUnits: Bool {
+        Set(entries.map(\.measurementUnitRawValue)).count != 1
+    }
+
     private func save() {
         guard canEdit, !entries.isEmpty else { return }
         let pointDistribution = distribute(totalPoints, across: entries.count)
@@ -1653,7 +1691,9 @@ private struct LedgerEntryEditorView: View {
             entry.occurredAt = Calendar.current.startOfDay(for: occurredAt)
             entry.weekEnding = weekEnding
             entry.points = pointDistribution[index]
-            entry.quantity = quantityPerEntry
+            if !hasMixedMeasurementUnits {
+                entry.quantity = quantityPerEntry
+            }
             entry.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         do {
