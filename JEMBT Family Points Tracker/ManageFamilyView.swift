@@ -11,6 +11,7 @@ import AppKit
 
 struct ManageFamilyView: View {
     @Environment(AppleIDManager.self) private var appleIDManager
+    @Environment(ReportingPeriod.self) private var reportingPeriod
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \FamilyMember.name) private var members: [FamilyMember]
     @Query(sort: \FamilyInvitation.createdAt, order: .reverse) private var invitations: [FamilyInvitation]
@@ -24,8 +25,6 @@ struct ManageFamilyView: View {
     @State private var inviteToPresentAfterAdd: PendingInviteShare?
     @State private var pendingInviteShare: PendingInviteShare?
     @State private var errorMessage: String?
-    @State private var selectedWeekEnding = PointsEngine.weekEnding(containing: .now)
-    @State private var showingReportingPeriodPicker = false
     @State private var quickActivity: QuickActivityRequest?
 
     private var canEdit: Bool {
@@ -48,7 +47,7 @@ struct ManageFamilyView: View {
     }
 
     private var weekEnding: Date {
-        selectedWeekEnding
+        reportingPeriod.weekEnding
     }
 
     private var familyEntries: [LedgerEntry] {
@@ -76,6 +75,10 @@ struct ManageFamilyView: View {
 
     var body: some View {
         List {
+            Section("Reporting week") {
+                ReportingWeekPicker()
+            }
+
             if let errorMessage {
                 Section {
                     Text(errorMessage)
@@ -100,11 +103,25 @@ struct ManageFamilyView: View {
                     Label("Stats & Trends", systemImage: "chart.xyaxis.line")
                 }
                 .accessibilityIdentifier("familyStatisticsLink")
+                NavigationLink {
+                    FamilyStorefrontView()
+                } label: {
+                    Label("Visit Family Store", systemImage: "cart.fill")
+                }
+                .accessibilityIdentifier("familyStorefrontLink")
+                if canChooseReportingPeriod {
+                    NavigationLink {
+                        SettlementView()
+                    } label: {
+                        Label("Settle / Close Books", systemImage: "checkmark.seal.fill")
+                    }
+                    .accessibilityIdentifier("familySettlementLink")
+                }
             }
 
             Section("Pending approval") {
                 NavigationLink {
-                    WeeklyLedgerView(weekEnding: weekEnding)
+                    WeeklyLedgerView()
                 } label: {
                     LabeledContent("View weekly ledger") {
                         Text(pendingApprovalCount == 0
@@ -149,16 +166,6 @@ struct ManageFamilyView: View {
         .navigationTitle(displayedFamilyName)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
-            if canChooseReportingPeriod {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showingReportingPeriodPicker = true
-                    } label: {
-                        Image(systemName: "calendar")
-                    }
-                    .accessibilityLabel("Reporting period ending \(weekEnding.formatted(date: .abbreviated, time: .omitted))")
-                }
-            }
             if canEdit {
                 ToolbarItemGroup(placement: .primaryAction) {
                     familyNameEditButton
@@ -175,27 +182,6 @@ struct ManageFamilyView: View {
             if let family = appleIDManager.currentFamily {
                 FamilyNameEditorView(currentName: family.name) { newName in
                     try saveFamilyName(newName, for: family)
-                }
-            }
-        }
-        .sheet(isPresented: $showingReportingPeriodPicker) {
-            NavigationStack {
-                Form {
-                    DatePicker(
-                        "Week ending",
-                        selection: Binding(
-                            get: { selectedWeekEnding },
-                            set: { selectedWeekEnding = PointsEngine.weekEnding(containing: $0) }
-                        ),
-                        displayedComponents: .date
-                    )
-                }
-                .navigationTitle("Reporting Period")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { showingReportingPeriodPicker = false }
-                    }
                 }
             }
         }
@@ -589,8 +575,9 @@ private struct MemberAdministrationRow: View {
                 HStack(spacing: 12) {
                     if let onReward {
                         Button(action: onReward) {
-                            Text(EntryKind.reward.activityEmoji)
+                            Image(systemName: EntryKind.reward.quickActionSymbolName)
                                 .font(.title2)
+                                .foregroundStyle(.green)
                                 .frame(width: 40, height: 36)
                                 .background(.green.opacity(0.14), in: Capsule())
                         }
@@ -599,8 +586,9 @@ private struct MemberAdministrationRow: View {
                     }
                     if let onPenalty {
                         Button(action: onPenalty) {
-                            Text(EntryKind.penalty.activityEmoji)
+                            Image(systemName: EntryKind.penalty.quickActionSymbolName)
                                 .font(.title2)
+                                .foregroundStyle(.red)
                                 .frame(width: 40, height: 36)
                                 .background(.indigo.opacity(0.14), in: Capsule())
                         }
@@ -728,7 +716,8 @@ private struct QuickActivityView: View {
         allRules.filter {
             $0.familyID == appleIDManager.currentFamily?.id &&
             $0.isEnabled &&
-            $0.catalog == catalog
+            $0.catalog == catalog &&
+            $0.isEligible(for: member, at: weekEnding)
         }
     }
 
@@ -812,7 +801,7 @@ private struct QuickActivityView: View {
                     Text(errorMessage).foregroundStyle(.red)
                 }
             }
-            .navigationTitle("\(kind.activityEmoji) \(member.name)")
+            .navigationTitle("\(kind == .reward ? "Award" : "Penalty") • \(member.name)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -905,7 +894,10 @@ private struct QuickActivityView: View {
             drafts[rule.id].map { (rule, $0) }
         }
         guard !selectedDrafts.isEmpty,
-              selectedDrafts.allSatisfy({ !$0.1.weekdays.isEmpty }) else { return }
+              selectedDrafts.allSatisfy({ !$0.1.weekdays.isEmpty && $0.0.isEligible(for: member, at: weekEnding) }) else {
+            errorMessage = "One or more selected items are not available for this child’s age."
+            return
+        }
 
         let submissionKind = ActivitySubmissionPolicy.submissionKind(
             member: appleIDManager.currentFamilyMember,
@@ -989,9 +981,8 @@ struct WeekdaySelector: View {
 }
 
 struct WeeklyLedgerView: View {
-    let weekEnding: Date
-
     @Environment(AppleIDManager.self) private var appleIDManager
+    @Environment(ReportingPeriod.self) private var reportingPeriod
     @Environment(\.modelContext) private var modelContext
     @Query private var members: [FamilyMember]
     @Query private var entries: [LedgerEntry]
@@ -1000,6 +991,8 @@ struct WeeklyLedgerView: View {
     @State private var sortDescriptors = PointsEngine.defaultLedgerSort
     @State private var editingSummary: LedgerSummary?
     @State private var showingBulkCopy = false
+
+    private var weekEnding: Date { reportingPeriod.weekEnding }
 
     private var canReview: Bool {
         appleIDManager.currentMembership?.role.canReviewLedger == true
@@ -1106,6 +1099,16 @@ struct WeeklyLedgerView: View {
                     .accessibilityIdentifier("copyLedgerWeek")
                 }
             }
+            if canReview {
+                ToolbarItem(placement: .primaryAction) {
+                    NavigationLink {
+                        SettlementView()
+                    } label: {
+                        Label("Close Books", systemImage: "checkmark.seal.fill")
+                    }
+                    .accessibilityIdentifier("ledgerSettlementLink")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button("Reset Sort", systemImage: "arrow.up.arrow.down") {
                     sortDescriptors = PointsEngine.defaultLedgerSort
@@ -1131,9 +1134,8 @@ struct WeeklyLedgerView: View {
         }
         .safeAreaInset(edge: .top) {
             VStack(spacing: 4) {
-                Text("Week ending \(weekEnding.formatted(date: .abbreviated, time: .omitted))")
+                ReportingWeekPicker()
                     .font(.caption)
-                    .foregroundStyle(.secondary)
                 if let reviewErrorMessage {
                     Text(reviewErrorMessage)
                         .font(.caption)
@@ -2442,6 +2444,7 @@ enum ContactBirthdayConverter {
     NavigationStack {
         ManageFamilyView()
             .environment(AppleIDManager())
+            .environment(ReportingPeriod())
             .modelContainer(for: [
                 AllowanceFamily.self,
                 FamilyInvitation.self,

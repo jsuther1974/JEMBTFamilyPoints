@@ -52,6 +52,46 @@ enum StorefrontEngine {
     static func canAfford(_ rule: RuleTemplate, balance: Int) -> Bool {
         balance >= abs(rule.defaultPoints)
     }
+
+    static func cartTotal(quantities: [UUID: Int], items: [RuleTemplate]) -> Int {
+        items.reduce(0) { total, item in
+            total + abs(item.defaultPoints) * max(0, quantities[item.id] ?? 0)
+        }
+    }
+
+    static func checkoutError(
+        quantities: [UUID: Int],
+        items: [RuleTemplate],
+        child: FamilyMember,
+        familyID: UUID,
+        balance: Int,
+        entries: [LedgerEntry],
+        at date: Date = .now,
+        calendar: Calendar = .current
+    ) -> String? {
+        let selected = items.filter { (quantities[$0.id] ?? 0) > 0 }
+        guard !selected.isEmpty else { return "Your cart is empty." }
+        for item in selected {
+            let quantity = quantities[item.id] ?? 0
+            guard quantity > 0,
+                  item.familyID == familyID,
+                  item.catalog == .tradingPost,
+                  item.isEnabled else {
+                return "\(item.title) is no longer available."
+            }
+            guard item.isEligible(for: child, at: date, calendar: calendar) else {
+                return "\(item.title) is not available for your age."
+            }
+            if let remaining = remainingQuantity(for: item, entries: entries, at: date, calendar: calendar),
+               quantity > remaining {
+                return "Only \(remaining) of \(item.title) remain."
+            }
+        }
+        guard cartTotal(quantities: quantities, items: selected) <= balance else {
+            return "You no longer have enough points for everything in your cart."
+        }
+        return nil
+    }
 }
 
 struct FamilyStorefrontView: View {
@@ -61,7 +101,8 @@ struct FamilyStorefrontView: View {
     @Query private var allRules: [RuleTemplate]
     @Query private var allEntries: [LedgerEntry]
     @Query private var allSettlements: [WeeklySettlement]
-    @State private var pendingPurchase: RuleTemplate?
+    @State private var cartQuantities: [UUID: Int] = [:]
+    @State private var showingCart = false
     @State private var editingRule: RuleTemplate?
     @State private var showingAddItem = false
     @State private var errorMessage: String?
@@ -94,10 +135,12 @@ struct FamilyStorefrontView: View {
     }
 
     private var storeItems: [RuleTemplate] {
-        allRules.filter {
-            $0.familyID == familyID &&
-            $0.catalog == .tradingPost &&
-            (canManage || $0.isEnabled)
+        allRules.filter { item in
+            item.familyID == familyID &&
+            item.catalog == .tradingPost &&
+            (canManage || (item.isEnabled && currentChild.map { child in
+                item.isEligible(for: child)
+            } == true))
         }.sorted {
             if $0.storeShelfPosition != $1.storeShelfPosition {
                 return $0.storeShelfPosition < $1.storeShelfPosition
@@ -112,6 +155,12 @@ struct FamilyStorefrontView: View {
     }
 
     private var currentWeekEnding: Date { PointsEngine.weekEnding(containing: .now) }
+
+    private var cartCount: Int { cartQuantities.values.reduce(0, +) }
+
+    private var cartItems: [RuleTemplate] {
+        allRules.filter { (cartQuantities[$0.id] ?? 0) > 0 }
+    }
 
     private var balance: Int {
         guard let currentChild else { return 0 }
@@ -153,7 +202,7 @@ struct FamilyStorefrontView: View {
                                     if canManage {
                                         editingRule = item
                                     } else {
-                                        pendingPurchase = item
+                                        addToCart(item)
                                     }
                                 }
                             }
@@ -185,6 +234,18 @@ struct FamilyStorefrontView: View {
         )
         .navigationTitle(storeName)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if canPurchase {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showingCart = true
+                    } label: {
+                        Label("Cart (\(cartCount))", systemImage: "cart.fill")
+                    }
+                    .accessibilityIdentifier("storeCartButton")
+                }
+            }
+        }
         .sheet(isPresented: $showingAddItem) {
             RuleEditorView(catalog: .tradingPost) { draft in
                 try save(draft, replacing: nil)
@@ -201,22 +262,14 @@ struct FamilyStorefrontView: View {
             .presentationCornerRadius(28)
             .presentationBackground(.regularMaterial)
         }
-        .confirmationDialog(
-            "Buy \(pendingPurchase?.title ?? "this reward")?",
-            isPresented: Binding(
-                get: { pendingPurchase != nil },
-                set: { if !$0 { pendingPurchase = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let item = pendingPurchase {
-                Button("Buy for \(abs(item.defaultPoints).formatted()) points") {
-                    purchase(item)
-                }
-            }
-            Button("Cancel", role: .cancel) { pendingPurchase = nil }
-        } message: {
-            Text("The points will be deducted immediately.")
+        .sheet(isPresented: $showingCart) {
+            StoreCartView(
+                items: cartItems,
+                quantities: $cartQuantities,
+                balance: balance,
+                remainingQuantity: { StorefrontEngine.remainingQuantity(for: $0, entries: familyEntries) },
+                onCheckout: checkoutCart
+            )
         }
         .alert("Storefront", isPresented: Binding(
             get: { errorMessage != nil || purchaseMessage != nil },
@@ -288,8 +341,7 @@ struct FamilyStorefrontView: View {
         }
     }
 
-    private func purchase(_ item: RuleTemplate) {
-        defer { pendingPurchase = nil }
+    private func addToCart(_ item: RuleTemplate) {
         guard canPurchase, let child = currentChild else {
             errorMessage = "Only a child can purchase rewards from their own account."
             return
@@ -298,42 +350,72 @@ struct FamilyStorefrontView: View {
             errorMessage = "This item is no longer available."
             return
         }
-        guard StorefrontEngine.remainingQuantity(for: item, entries: familyEntries).map({ $0 > 0 }) ?? true else {
+        guard item.isEligible(for: child) else {
+            errorMessage = "This item is not available for your age."
+            return
+        }
+        let quantityInCart = cartQuantities[item.id] ?? 0
+        guard StorefrontEngine.remainingQuantity(for: item, entries: familyEntries).map({ quantityInCart < $0 }) ?? true else {
             errorMessage = "Sorry, this item just sold out."
             return
         }
-        guard StorefrontEngine.canAfford(item, balance: balance) else {
-            errorMessage = "You no longer have enough points for this item."
+        guard StorefrontEngine.cartTotal(quantities: cartQuantities, items: allRules) + abs(item.defaultPoints) <= balance else {
+            errorMessage = "You do not have enough points to add this item."
             return
+        }
+        cartQuantities[item.id] = quantityInCart + 1
+    }
+
+    private func checkoutCart() -> String? {
+        guard canPurchase, let child = currentChild, let familyID else {
+            return "Only a child can purchase rewards from their own account."
         }
 
         let now = Date.now
+        if let error = StorefrontEngine.checkoutError(
+            quantities: cartQuantities,
+            items: cartItems,
+            child: child,
+            familyID: familyID,
+            balance: balance,
+            entries: familyEntries,
+            at: now
+        ) {
+            return error
+        }
         let recorder = child.name
-        modelContext.insert(
-            LedgerEntry(
-                memberID: child.id,
-                ruleID: item.id,
-                occurredAt: now,
-                weekEnding: PointsEngine.weekEnding(containing: now),
-                title: item.title,
-                notes: "Purchased in the Family Storefront",
-                points: -abs(item.defaultPoints),
-                kind: .purchase,
-                status: .approved,
-                submittedBy: recorder,
-                reviewedBy: "Family Storefront",
-                reviewedAt: now,
-                quantity: 1,
-                measurementUnit: .item
-            )
-        )
+        for item in cartItems {
+            for _ in 0..<(cartQuantities[item.id] ?? 0) {
+                modelContext.insert(
+                    LedgerEntry(
+                        memberID: child.id,
+                        ruleID: item.id,
+                        occurredAt: now,
+                        weekEnding: PointsEngine.weekEnding(containing: now),
+                        title: item.title,
+                        notes: "Purchased in the Family Storefront cart",
+                        points: -abs(item.defaultPoints),
+                        kind: .purchase,
+                        status: .approved,
+                        submittedBy: recorder,
+                        reviewedBy: "Family Storefront",
+                        reviewedAt: now,
+                        quantity: 1,
+                        measurementUnit: .item
+                    )
+                )
+            }
+        }
 
         do {
             try modelContext.save()
-            purchaseMessage = "You bought \(item.title)!"
+            let count = cartCount
+            cartQuantities.removeAll()
+            purchaseMessage = "You bought \(count) item\(count == 1 ? "" : "s")!"
+            return nil
         } catch {
             modelContext.rollback()
-            errorMessage = "The purchase could not be completed: \(error.localizedDescription)"
+            return "The purchase could not be completed: \(error.localizedDescription)"
         }
     }
 
@@ -374,11 +456,90 @@ struct FamilyStorefrontView: View {
         target.minimumPeriod = draft.minimumPeriod
         target.storeInventoryLimit = draft.hasInventoryLimit ? draft.inventoryLimit : nil
         target.storeInventoryPeriod = draft.inventoryPeriod
+        target.minimumEligibleAge = draft.hasAgeRange ? draft.minimumAge : nil
+        target.maximumEligibleAge = draft.hasAgeRange ? draft.maximumAge : nil
         target.warningUnits = 0
         target.acceleratorEnabled = false
         target.requiresApproval = true
         target.isEnabled = draft.isEnabled
         try modelContext.save()
+    }
+}
+
+private struct StoreCartView: View {
+    let items: [RuleTemplate]
+    @Binding var quantities: [UUID: Int]
+    let balance: Int
+    let remainingQuantity: (RuleTemplate) -> Int?
+    let onCheckout: () -> String?
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var errorMessage: String?
+
+    private var total: Int {
+        StorefrontEngine.cartTotal(quantities: quantities, items: items)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if items.isEmpty {
+                    ContentUnavailableView("Cart Is Empty", systemImage: "cart")
+                } else {
+                    Section("Items") {
+                        ForEach(items) { item in
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Label(item.title, systemImage: item.iconName)
+                                    Spacer()
+                                    Text("\(abs(item.defaultPoints).formatted()) pts")
+                                }
+                                Stepper(
+                                    "Quantity: \(quantities[item.id] ?? 0)",
+                                    value: quantityBinding(for: item),
+                                    in: 0...max(0, remainingQuantity(item) ?? 100)
+                                )
+                            }
+                        }
+                    }
+                    Section("Checkout") {
+                        LabeledContent("Available", value: "\(balance.formatted()) points")
+                        LabeledContent("Cart total", value: "\(total.formatted()) points")
+                    }
+                }
+                if let errorMessage {
+                    Text(errorMessage).foregroundStyle(.red)
+                }
+            }
+            .navigationTitle("Shopping Cart")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Continue Shopping") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Checkout") {
+                        if let error = onCheckout() {
+                            errorMessage = error
+                        } else {
+                            dismiss()
+                        }
+                    }
+                    .disabled(items.isEmpty || total > balance)
+                    .accessibilityIdentifier("checkoutStoreCart")
+                }
+            }
+        }
+    }
+
+    private func quantityBinding(for item: RuleTemplate) -> Binding<Int> {
+        Binding(
+            get: { quantities[item.id] ?? 0 },
+            set: { quantity in
+                if quantity > 0 { quantities[item.id] = quantity }
+                else { quantities.removeValue(forKey: item.id) }
+            }
+        )
     }
 }
 

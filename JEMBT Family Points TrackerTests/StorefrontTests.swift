@@ -113,6 +113,97 @@ final class StorefrontTests: XCTestCase {
         )
     }
 
+    func testCartTotalIncludesQuantitiesAcrossItems() {
+        let movie = makeRule(price: 300)
+        let snack = makeRule(price: 75)
+
+        XCTAssertEqual(
+            StorefrontEngine.cartTotal(
+                quantities: [movie.id: 2, snack.id: 3],
+                items: [movie, snack]
+            ),
+            825
+        )
+    }
+
+    func testCheckoutRevalidatesAgeInventoryAndTotalBalance() {
+        let familyID = UUID()
+        let child = FamilyMember(
+            familyID: familyID,
+            name: "Child",
+            birthDate: date(2018, 1, 1),
+            role: .child
+        )
+        let available = RuleTemplate(
+            familyID: familyID,
+            title: "Available",
+            category: .rewardStore,
+            kind: .purchase,
+            defaultPoints: -300,
+            storeInventoryLimit: 2,
+            storeInventoryPeriod: .weekly,
+            minimumEligibleAge: 8,
+            maximumEligibleAge: 12
+        )
+        let teenOnly = RuleTemplate(
+            familyID: familyID,
+            title: "Teen only",
+            category: .rewardStore,
+            kind: .purchase,
+            defaultPoints: -100,
+            minimumEligibleAge: 13,
+            maximumEligibleAge: 17
+        )
+        let now = date(2026, 11, 6)
+        let existingPurchase = purchase(
+            rule: available,
+            occurredAt: now,
+            weekEnding: date(2026, 11, 7),
+            status: .approved
+        )
+
+        XCTAssertNil(StorefrontEngine.checkoutError(
+            quantities: [available.id: 1],
+            items: [available],
+            child: child,
+            familyID: familyID,
+            balance: 300,
+            entries: [existingPurchase],
+            at: now,
+            calendar: calendar
+        ))
+        XCTAssertEqual(StorefrontEngine.checkoutError(
+            quantities: [available.id: 2],
+            items: [available],
+            child: child,
+            familyID: familyID,
+            balance: 1_000,
+            entries: [existingPurchase],
+            at: now,
+            calendar: calendar
+        ), "Only 1 of Available remain.")
+        XCTAssertEqual(StorefrontEngine.checkoutError(
+            quantities: [teenOnly.id: 1],
+            items: [teenOnly],
+            child: child,
+            familyID: familyID,
+            balance: 1_000,
+            entries: [],
+            at: now,
+            calendar: calendar
+        ), "Teen only is not available for your age.")
+        XCTAssertEqual(StorefrontEngine.checkoutError(
+            quantities: [available.id: 1],
+            items: [available],
+            child: child,
+            familyID: familyID,
+            balance: 299,
+            entries: [],
+            at: now,
+            calendar: calendar
+        ), "You no longer have enough points for everything in your cart.")
+    }
+
     private func makeRule(
         price: Int = 100,
         limit: Int? = nil,

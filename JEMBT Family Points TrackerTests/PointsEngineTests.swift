@@ -970,6 +970,101 @@ final class PointsEngineTests: XCTestCase {
         XCTAssertEqual(copies[1].kind, .penalty)
     }
 
+    func testRuleAgeEligibilityIsInclusiveAndDefaultsToAllAges() {
+        let evaluationDate = date(2026, 11, 7)
+        let eightYearOld = FamilyMember(name: "Eight", birthDate: date(2018, 11, 7), role: .child)
+        let twelveYearOld = FamilyMember(name: "Twelve", birthDate: date(2014, 11, 7), role: .child)
+        let unknownAge = FamilyMember(name: "Unknown", role: .child)
+        let parent = FamilyMember(name: "Parent", role: .parent)
+        let unrestricted = RuleTemplate(title: "All ages", category: .household, kind: .reward, defaultPoints: 10)
+        let restricted = RuleTemplate(
+            title: "Ages 8 to 12",
+            category: .household,
+            kind: .reward,
+            defaultPoints: 10,
+            minimumEligibleAge: 8,
+            maximumEligibleAge: 12
+        )
+
+        XCTAssertTrue(unrestricted.isEligible(for: unknownAge, at: evaluationDate, calendar: calendar))
+        XCTAssertTrue(restricted.isEligible(for: eightYearOld, at: evaluationDate, calendar: calendar))
+        XCTAssertTrue(restricted.isEligible(for: twelveYearOld, at: evaluationDate, calendar: calendar))
+        XCTAssertFalse(restricted.isEligible(
+            for: FamilyMember(name: "Seven", birthDate: date(2019, 11, 8), role: .child),
+            at: evaluationDate,
+            calendar: calendar
+        ))
+        XCTAssertFalse(restricted.isEligible(for: unknownAge, at: evaluationDate, calendar: calendar))
+        XCTAssertTrue(restricted.isEligible(for: parent, at: evaluationDate, calendar: calendar))
+        XCTAssertEqual(restricted.ageEligibilityDescription, "Ages 8–12")
+    }
+
+    func testAgeIneligibleMinimumDoesNotProposeDeduction() {
+        let familyID = UUID()
+        let child = FamilyMember(
+            familyID: familyID,
+            name: "Child",
+            birthDate: date(2018, 1, 1),
+            role: .child
+        )
+        let rule = minimumRule(
+            familyID: familyID,
+            title: "Teen responsibility",
+            points: 100,
+            minimum: 2,
+            period: .weekly,
+            deductWhenMissed: true
+        )
+        rule.minimumEligibleAge = 13
+        rule.maximumEligibleAge = 17
+
+        XCTAssertTrue(PointsEngine.minimumMissDeductions(
+            for: child,
+            weekEnding: date(2026, 11, 7),
+            rules: [rule],
+            entries: [],
+            calendar: calendar
+        ).isEmpty)
+    }
+
+    @MainActor
+    func testReportingPeriodNormalizesSelectedDateToSaturday() {
+        let period = ReportingPeriod(weekEnding: date(2026, 11, 3))
+        XCTAssertEqual(period.weekEnding, date(2026, 11, 7))
+
+        period.select(date(2026, 11, 8))
+        XCTAssertEqual(period.weekEnding, date(2026, 11, 14))
+    }
+
+    func testCloseBooksRejectsOnlyWaitingItemsForSelectedFamilyAndWeek() {
+        let childID = UUID()
+        let siblingID = UUID()
+        let weekEnding = date(2026, 11, 7)
+        let reviewedAt = date(2026, 11, 8)
+        let waiting = LedgerEntry(memberID: childID, weekEnding: weekEnding, title: "Waiting", points: 10, kind: .reward, status: .pending, submittedBy: "Child")
+        let siblingWaiting = LedgerEntry(memberID: siblingID, weekEnding: weekEnding, title: "Sibling", points: -10, kind: .penalty, status: .pending, submittedBy: "Sibling")
+        let approved = LedgerEntry(memberID: childID, weekEnding: weekEnding, title: "Approved", points: 10, kind: .reward, status: .approved, submittedBy: "Parent")
+        let otherWeek = LedgerEntry(memberID: childID, weekEnding: date(2026, 10, 31), title: "Earlier", points: 10, kind: .reward, status: .pending, submittedBy: "Child")
+        let outsider = LedgerEntry(memberID: UUID(), weekEnding: weekEnding, title: "Outsider", points: 10, kind: .reward, status: .pending, submittedBy: "Child")
+
+        XCTAssertEqual(PointsEngine.rejectPendingEntriesBeforeSettlement(
+            weekEnding: weekEnding,
+            memberIDs: [childID, siblingID],
+            entries: [waiting, siblingWaiting, approved, otherWeek, outsider],
+            reviewedBy: "Parent",
+            reviewedAt: reviewedAt,
+            calendar: calendar
+        ), 2)
+
+        XCTAssertEqual(waiting.status, .rejected)
+        XCTAssertEqual(siblingWaiting.status, .rejected)
+        XCTAssertEqual(waiting.reviewedBy, "Parent")
+        XCTAssertEqual(waiting.reviewedAt, reviewedAt)
+        XCTAssertEqual(approved.status, .approved)
+        XCTAssertEqual(otherWeek.status, .pending)
+        XCTAssertEqual(outsider.status, .pending)
+    }
+
     private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
         calendar.date(from: DateComponents(year: year, month: month, day: day))!
     }

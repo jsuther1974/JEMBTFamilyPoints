@@ -21,6 +21,15 @@ enum EntryKind: String, Codable, CaseIterable {
         case .adjustment: "⚖️"
         }
     }
+
+    var quickActionSymbolName: String {
+        switch self {
+        case .reward: "hand.thumbsup.fill"
+        case .penalty: "hand.thumbsdown.fill"
+        case .purchase: "cart.fill"
+        case .adjustment: "plusminus.circle.fill"
+        }
+    }
 }
 
 enum ApprovalStatus: String, Codable, CaseIterable {
@@ -73,6 +82,7 @@ enum RuleCatalog: String, Codable, CaseIterable, Identifiable {
         case .tradingPost: .purchase
         }
     }
+
 }
 
 enum RuleFrequencyKind: String, Codable, CaseIterable, Identifiable {
@@ -254,6 +264,8 @@ final class RuleTemplate {
     var storeInventoryLimit: Int?
     var storeInventoryPeriodRawValue: String = StoreInventoryPeriod.weekly.rawValue
     var storeShelfPosition: Int = 0
+    var minimumEligibleAge: Int?
+    var maximumEligibleAge: Int?
 
     var category: RuleCategory {
         get { RuleCategory(rawValue: categoryRawValue) ?? .household }
@@ -307,6 +319,31 @@ final class RuleTemplate {
     var storeInventoryPeriod: StoreInventoryPeriod {
         get { StoreInventoryPeriod(rawValue: storeInventoryPeriodRawValue) ?? .weekly }
         set { storeInventoryPeriodRawValue = newValue.rawValue }
+    }
+
+    var ageEligibilityDescription: String {
+        switch (minimumEligibleAge, maximumEligibleAge) {
+        case (nil, nil): "All ages"
+        case let (minimum?, maximum?): "Ages \(minimum)–\(maximum)"
+        case let (minimum?, nil): "Ages \(minimum)+"
+        case let (nil, maximum?): "Ages \(maximum) and under"
+        }
+    }
+
+    func isEligible(
+        for member: FamilyMember,
+        at date: Date = .now,
+        calendar: Calendar = .current
+    ) -> Bool {
+        guard member.role == .child else { return true }
+        guard minimumEligibleAge != nil || maximumEligibleAge != nil else { return true }
+        guard let birthDate = member.birthDate,
+              let age = calendar.dateComponents([.year], from: birthDate, to: date).year else {
+            return false
+        }
+        if let minimumEligibleAge, age < minimumEligibleAge { return false }
+        if let maximumEligibleAge, age > maximumEligibleAge { return false }
+        return true
     }
 
     var firstAwardNumber: Int {
@@ -372,7 +409,9 @@ final class RuleTemplate {
         minimumPeriod: RuleMinimumPeriod = .weekly,
         storeInventoryLimit: Int? = nil,
         storeInventoryPeriod: StoreInventoryPeriod = .weekly,
-        storeShelfPosition: Int = 0
+        storeShelfPosition: Int = 0,
+        minimumEligibleAge: Int? = nil,
+        maximumEligibleAge: Int? = nil
     ) {
         self.id = id
         self.familyID = familyID
@@ -403,6 +442,8 @@ final class RuleTemplate {
         self.storeInventoryLimit = storeInventoryLimit
         self.storeInventoryPeriodRawValue = storeInventoryPeriod.rawValue
         self.storeShelfPosition = storeShelfPosition
+        self.minimumEligibleAge = minimumEligibleAge
+        self.maximumEligibleAge = maximumEligibleAge
     }
 
     func calculatedPoints(quantity: Double, riderMultiplier: Double = 1) -> Int {

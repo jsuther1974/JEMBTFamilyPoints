@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(AppleIDManager.self) private var appleIDManager
     @State private var selectedTab = "family"
+    @State private var reportingPeriod = ReportingPeriod()
     
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -16,7 +17,7 @@ struct ContentView: View {
                 .tabItem { Label("Rules", systemImage: "list.bullet.rectangle") }
                 .tag("rules")
             NavigationStack {
-                WeeklyLedgerView(weekEnding: PointsEngine.weekEnding(containing: .now))
+                WeeklyLedgerView()
             }
                 .tabItem { Label("Ledger", systemImage: "tablecells") }
                 .tag("ledger")
@@ -29,6 +30,7 @@ struct ContentView: View {
             .tabItem { Label("Family", systemImage: "person.3.fill") }
             .tag("family")
         }
+        .environment(reportingPeriod)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -59,6 +61,7 @@ struct ContentView: View {
 
 private struct LogActivityView: View {
     @Environment(AppleIDManager.self) private var appleIDManager
+    @Environment(ReportingPeriod.self) private var reportingPeriod
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \FamilyMember.name) private var members: [FamilyMember]
     @Query(sort: \RuleTemplate.title) private var allRules: [RuleTemplate]
@@ -75,8 +78,13 @@ private struct LogActivityView: View {
         allRules.filter {
             $0.familyID == appleIDManager.currentFamily?.id &&
             $0.isEnabled &&
-            (submissionKind != .caregiverRecommendation || $0.catalog != .tradingPost)
+            (submissionKind != .caregiverRecommendation || $0.catalog != .tradingPost) &&
+            (selectedMember == nil || $0.isEligible(for: selectedMember!, at: reportingPeriod.weekEnding))
         }
+    }
+
+    private var selectedMember: FamilyMember? {
+        familyMembers.first { $0.id == selectedMemberID }
     }
 
     private var familyMembers: [FamilyMember] {
@@ -105,6 +113,12 @@ private struct LogActivityView: View {
                         Text(member.name).tag(member.id as UUID?)
                     }
                 }
+                .onChange(of: selectedMemberID) {
+                    if let selectedRule, let selectedMember,
+                       !selectedRule.isEligible(for: selectedMember, at: reportingPeriod.weekEnding) {
+                        selectedRuleID = nil
+                    }
+                }
 
                 Picker("Point item or reward", selection: $selectedRuleID) {
                     Text("Select").tag(nil as UUID?)
@@ -120,7 +134,7 @@ private struct LogActivityView: View {
                 if let rule = selectedRule {
                     Section("Days occurred") {
                         WeekdaySelector(
-                            weekEnding: PointsEngine.weekEnding(containing: .now),
+                            weekEnding: reportingPeriod.weekEnding,
                             selection: $selectedWeekdays
                         )
                     }
@@ -176,19 +190,23 @@ private struct LogActivityView: View {
 
     private func save() {
         guard
-            let memberID = selectedMemberID,
+            let member = selectedMember,
             let rule = selectedRule
         else {
             errorMessage = "Select a family member and rule."
             return
         }
 
-        let weekEnding = PointsEngine.weekEnding(containing: .now)
+        let weekEnding = reportingPeriod.weekEnding
+        guard rule.isEligible(for: member, at: weekEnding) else {
+            errorMessage = "This item is not available for the selected child’s age."
+            return
+        }
         let recorder = appleIDManager.currentFamilyMember?.name ?? submissionKind.submittedBy
         for occurredAt in PointsEngine.dates(inWeekEnding: weekEnding, matchingWeekdays: selectedWeekdays) {
             modelContext.insert(
                 LedgerEntry(
-                    memberID: memberID,
+                    memberID: member.id,
                     ruleID: rule.id,
                     occurredAt: occurredAt,
                     weekEnding: weekEnding,
@@ -229,17 +247,20 @@ private struct LogActivityView: View {
     }
 }
 
-private struct SettlementView: View {
+struct SettlementView: View {
     @Environment(AppleIDManager.self) private var appleIDManager
+    @Environment(ReportingPeriod.self) private var reportingPeriod
     @Environment(\.modelContext) private var modelContext
     @Query private var members: [FamilyMember]
     @Query private var entries: [LedgerEntry]
     @Query private var settlements: [WeeklySettlement]
     @Query private var rules: [RuleTemplate]
-    @State private var selectedWeekEnding = PointsEngine.weekEnding(containing: .now)
     @State private var errorMessage: String?
     @State private var appliedMinimumDeductions: [UUID: Set<UUID>] = [:]
     @State private var reviewedMinimumDeductions: Set<UUID> = []
+    @State private var settlementPendingConfirmation: UUID?
+
+    private var selectedWeekEnding: Date { reportingPeriod.weekEnding }
 
     private var canConfirm: Bool {
         appleIDManager.currentMembership?.role.canManageRules == true
@@ -263,14 +284,19 @@ private struct SettlementView: View {
         )
     }
 
+    private var pendingEntriesForWeek: [LedgerEntry] {
+        let ids = Set(members.filter { $0.familyID == appleIDManager.currentFamily?.id }.map(\.id))
+        return PointsEngine.pendingEntriesForReview(
+            weekEnding: selectedWeekEnding,
+            memberIDs: ids,
+            entries: entries
+        )
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                DatePicker(
-                    "Week ending",
-                    selection: $selectedWeekEnding,
-                    displayedComponents: .date
-                )
+                ReportingWeekPicker()
 
                 if let errorMessage {
                     Text(errorMessage)
@@ -326,7 +352,7 @@ private struct SettlementView: View {
                                 .foregroundStyle(.green)
                         } else {
                             Button("Confirm settlement") {
-                                confirm(draft)
+                                requestConfirmation(for: draft)
                             }
                             .buttonStyle(.borderedProminent)
                             .disabled(
@@ -338,6 +364,27 @@ private struct SettlementView: View {
                 }
             }
             .navigationTitle("Weekly Settlement")
+            .alert(
+                "Reject waiting items and close the books?",
+                isPresented: Binding(
+                    get: { settlementPendingConfirmation != nil },
+                    set: { if !$0 { settlementPendingConfirmation = nil } }
+                )
+            ) {
+                Button("Not Yet", role: .cancel) {
+                    settlementPendingConfirmation = nil
+                }
+                Button("Reject Waiting & Settle", role: .destructive) {
+                    guard let childID = settlementPendingConfirmation,
+                          let draft = drafts.first(where: { $0.child.id == childID }) else {
+                        settlementPendingConfirmation = nil
+                        return
+                    }
+                    confirm(draft, rejectingPending: true)
+                }
+            } message: {
+                Text("\(pendingEntriesForWeek.count) item\(pendingEntriesForWeek.count == 1 ? " is" : "s are") still waiting for parent review. Continuing will reject all waiting items in this week before settlement.")
+            }
             .onChange(of: selectedWeekEnding) {
                 appliedMinimumDeductions.removeAll()
                 reviewedMinimumDeductions.removeAll()
@@ -389,7 +436,15 @@ private struct SettlementView: View {
         }
     }
 
-    private func confirm(_ draft: SettlementDraft) {
+    private func requestConfirmation(for draft: SettlementDraft) {
+        if pendingEntriesForWeek.isEmpty {
+            confirm(draft)
+        } else {
+            settlementPendingConfirmation = draft.child.id
+        }
+    }
+
+    private func confirm(_ draft: SettlementDraft, rejectingPending: Bool = false) {
         guard canConfirm,
               !isConfirmed(draft),
               draft.minimumMissDeductions.isEmpty || reviewedMinimumDeductions.contains(draft.child.id) else {
@@ -399,6 +454,18 @@ private struct SettlementView: View {
         let selectedRuleIDs = selectedRuleIDs(for: draft)
         let selectedDeductions = draft.minimumMissDeductions.filter { selectedRuleIDs.contains($0.ruleID) }
         let deductionPoints = draft.deductionPoints(applying: selectedRuleIDs)
+
+        let reviewer = appleIDManager.currentFamilyMember?.name ?? "Parent"
+        if rejectingPending {
+            let memberIDs = Set(members.filter { $0.familyID == appleIDManager.currentFamily?.id }.map(\.id))
+            PointsEngine.rejectPendingEntriesBeforeSettlement(
+                weekEnding: selectedWeekEnding,
+                memberIDs: memberIDs,
+                entries: entries,
+                reviewedBy: reviewer,
+                reviewedAt: .now
+            )
+        }
 
         modelContext.insert(
             WeeklySettlement(
@@ -417,14 +484,16 @@ private struct SettlementView: View {
                 finalPoints: draft.finalPoints(applying: selectedRuleIDs),
                 cashAmount: draft.cashAmount(applying: selectedRuleIDs),
                 debtCarriedOut: draft.debtCarriedOut(applying: selectedRuleIDs),
-                confirmedBy: appleIDManager.currentFamilyMember?.name ?? "Parent"
+                confirmedBy: reviewer
             )
         )
 
         do {
             try modelContext.save()
             errorMessage = nil
+            settlementPendingConfirmation = nil
         } catch {
+            modelContext.rollback()
             errorMessage = "The settlement could not be saved: \(error.localizedDescription)"
         }
     }

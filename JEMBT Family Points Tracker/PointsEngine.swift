@@ -276,6 +276,28 @@ enum PointsEngine {
         return reviewedCount
     }
 
+    @discardableResult
+    static func rejectPendingEntriesBeforeSettlement(
+        weekEnding: Date,
+        memberIDs: Set<UUID>,
+        entries: [LedgerEntry],
+        reviewedBy: String,
+        reviewedAt: Date = .now,
+        calendar: Calendar = .current
+    ) -> Int {
+        applyReview(
+            to: pendingEntriesForReview(
+                weekEnding: weekEnding,
+                memberIDs: memberIDs,
+                entries: entries,
+                calendar: calendar
+            ),
+            status: .rejected,
+            reviewedBy: reviewedBy,
+            reviewedAt: reviewedAt
+        )
+    }
+
     static func ledgerSummaries(
         weekEnding: Date,
         memberIDs: Set<UUID>,
@@ -522,7 +544,8 @@ enum PointsEngine {
                 $0.kind == .reward &&
                 $0.defaultPoints > 0 &&
                 $0.minimumTarget != nil &&
-                $0.deductStartingPointsWhenMinimumMissed
+                $0.deductStartingPointsWhenMinimumMissed &&
+                $0.isEligible(for: child, at: weekEnding, calendar: calendar)
             }
             .compactMap { rule in
                 let matchingEntries = entries.filter {

@@ -105,7 +105,17 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         app.buttons["Cancel"].tap()
 
         app.openFamilyTab()
-        XCTAssertFalse(app.descendants(matching: .any)["familyStorefrontLink"].exists)
+        let familyStoreLink = app.descendants(matching: .any)["familyStorefrontLink"]
+        XCTAssertTrue(familyStoreLink.waitForExistence(timeout: 5))
+        let settlementLink = app.descendants(matching: .any)["familySettlementLink"]
+        XCTAssertTrue(settlementLink.exists)
+        settlementLink.tap()
+        XCTAssertTrue(app.navigationBars["Weekly Settlement"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["reportingWeekPicker"].exists)
+        app.navigationBars["Weekly Settlement"].buttons.firstMatch.tap()
+        XCTAssertTrue(familyStoreLink.waitForExistence(timeout: 5))
+        familyStoreLink.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["storefrontSign"].waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -281,18 +291,8 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         app.signInAndJoinDemoFamilyIfNeeded()
         app.openFamilyTab()
 
-        let weekHeading = app.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH 'Week ending '")
-        ).firstMatch
-        XCTAssertFalse(weekHeading.exists, "Expected no standalone Week ending section.")
-
-        let reportingPeriodButton = app.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH 'Reporting period ending '")
-        ).firstMatch
-        XCTAssertTrue(reportingPeriodButton.waitForExistence(timeout: 5))
-        reportingPeriodButton.tap()
-        XCTAssertTrue(app.navigationBars["Reporting Period"].waitForExistence(timeout: 5))
-        app.navigationBars["Reporting Period"].buttons["Done"].tap()
+        let reportingWeek = app.descendants(matching: .any)["reportingWeekPicker"]
+        XCTAssertTrue(reportingWeek.waitForExistence(timeout: 5), "Expected the selected week to be visible and changeable on Family.")
 
         let childPoints = app.staticTexts["pointsSummary-Mateo"]
         XCTAssertTrue(childPoints.waitForExistence(timeout: 5), "Expected points in Mateo's member card.")
@@ -386,6 +386,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         ledgerLink.tap()
 
         XCTAssertTrue(app.navigationBars["Weekly Ledger"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["reportingWeekPicker"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["weeklyLedgerHeader"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["ledgerStartingValue-Mateo"].waitForExistence(timeout: 5))
         let advocateRows = app.descendants(matching: .any).matching(identifier: "ledgerSummary-Mateo-Advocate Award")
@@ -465,6 +466,8 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         ledgerTab.tap()
 
         XCTAssertTrue(app.navigationBars["Weekly Ledger"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["reportingWeekPicker"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["ledgerSettlementLink"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["weeklyLedgerHeader"].waitForExistence(timeout: 5))
 
         let leadingColumns = ["type", "status", "day", "person", "item"].map {

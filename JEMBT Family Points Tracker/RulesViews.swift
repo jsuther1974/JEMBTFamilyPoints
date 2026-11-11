@@ -182,6 +182,8 @@ struct RuleCatalogListView: View {
         target.minimumPeriod = draft.minimumPeriod
         target.storeInventoryLimit = draft.hasInventoryLimit ? draft.inventoryLimit : nil
         target.storeInventoryPeriod = draft.inventoryPeriod
+        target.minimumEligibleAge = draft.hasAgeRange ? draft.minimumAge : nil
+        target.maximumEligibleAge = draft.hasAgeRange ? draft.maximumAge : nil
         target.warningUnits = 0
         target.acceleratorEnabled = false
         target.requiresApproval = true
@@ -240,6 +242,11 @@ private struct RuleRow: View {
                 Text(rule.pointSummary)
                     .font(.subheadline)
                     .foregroundStyle(rule.defaultPoints < 0 ? .red : .secondary)
+                if rule.minimumEligibleAge != nil || rule.maximumEligibleAge != nil {
+                    Text(rule.ageEligibilityDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 if !rule.guidance.isEmpty {
                     Text(rule.guidance)
                         .font(.caption)
@@ -275,6 +282,10 @@ private struct RuleDetailView: View {
 
             if !rule.guidance.isEmpty {
                 Section("Description") { Text(rule.guidance) }
+            }
+
+            Section("Child age eligibility") {
+                Text(rule.ageEligibilityDescription)
             }
 
             if rule.catalog == .tradingPost {
@@ -351,6 +362,18 @@ struct RuleEditorView: View {
                     } footer: {
                         Text("Daily stock resets at midnight, weekly stock resets each Sunday, and total stock does not reset.")
                     }
+                }
+
+                Section {
+                    Toggle("Limit by child age", isOn: $draft.hasAgeRange)
+                    if draft.hasAgeRange {
+                        Stepper("Minimum age: \(draft.minimumAge)", value: $draft.minimumAge, in: 0...100)
+                        Stepper("Maximum age: \(draft.maximumAge)", value: $draft.maximumAge, in: 0...100)
+                    }
+                } header: {
+                    Text("Child age eligibility")
+                } footer: {
+                    Text("Items are available to all ages by default. When limited, both ages are inclusive. Adults remain eligible for parent penalties.")
                 }
 
                 Section {
@@ -544,6 +567,10 @@ struct RuleEditorView: View {
             validationMessage = "The ending award cannot come before the starting award."
             return
         }
+        if draft.hasAgeRange, draft.maximumAge < draft.minimumAge {
+            validationMessage = "The maximum age cannot be less than the minimum age."
+            return
+        }
         do {
             try onSave(draft)
             dismiss()
@@ -630,6 +657,9 @@ struct RuleDraft {
     var hasInventoryLimit: Bool
     var inventoryLimit: Int
     var inventoryPeriod: StoreInventoryPeriod
+    var hasAgeRange: Bool
+    var minimumAge: Int
+    var maximumAge: Int
 
     @MainActor
     init(catalog: RuleCatalog, rule: RuleTemplate?, riders: [RuleRider]) {
@@ -657,6 +687,9 @@ struct RuleDraft {
         hasInventoryLimit = rule?.storeInventoryLimit != nil
         inventoryLimit = max(1, rule?.storeInventoryLimit ?? 1)
         inventoryPeriod = rule?.storeInventoryPeriod ?? .weekly
+        hasAgeRange = rule?.minimumEligibleAge != nil || rule?.maximumEligibleAge != nil
+        minimumAge = max(0, rule?.minimumEligibleAge ?? 0)
+        maximumAge = max(minimumAge, rule?.maximumEligibleAge ?? 17)
     }
 
     func signedPoints(for catalog: RuleCatalog) -> Int {
