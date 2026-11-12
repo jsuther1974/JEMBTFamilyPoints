@@ -300,6 +300,93 @@ final class PointsEngineTests: XCTestCase {
         XCTAssertEqual(draft.finalPoints(applying: [homework.id, chores.id]), 625)
     }
 
+    func testSettlementUsesFamilyConfiguredCashValuePerPoint() {
+        let familyID = UUID()
+        let child = FamilyMember(
+            familyID: familyID,
+            name: "Child",
+            birthDate: date(2018, 1, 1),
+            role: .child
+        )
+
+        let draft = PointsEngine.settlementDrafts(
+            weekEnding: date(2026, 9, 12),
+            members: [child],
+            entries: [],
+            settlements: [],
+            cashValuePerPoint: Decimal(string: "0.025")!,
+            calendar: calendar
+        ).first!
+
+        XCTAssertEqual(draft.cashValuePerPoint, Decimal(string: "0.025")!)
+        XCTAssertEqual(draft.cashAmount, Decimal(20))
+        XCTAssertEqual(draft.cashAmount(applying: []), Decimal(20))
+    }
+
+    func testMinimumMissDecisionsRequireEveryRequirementAndAuditAbsolutions() {
+        let familyID = UUID()
+        let child = FamilyMember(
+            familyID: familyID,
+            name: "Child",
+            birthDate: date(2018, 1, 1),
+            role: .child
+        )
+        let homework = minimumRule(
+            familyID: familyID,
+            title: "Homework",
+            points: 100,
+            minimum: 4,
+            period: .weekly,
+            deductWhenMissed: true
+        )
+        let chores = minimumRule(
+            familyID: familyID,
+            title: "Chores",
+            points: 75,
+            minimum: 3,
+            period: .weekly,
+            deductWhenMissed: true
+        )
+        let draft = PointsEngine.settlementDrafts(
+            weekEnding: date(2026, 9, 12),
+            members: [child],
+            entries: [],
+            settlements: [],
+            rules: [homework, chores],
+            calendar: calendar
+        ).first!
+
+        XCTAssertFalse(draft.decisionsAreComplete([homework.id: .deduct]))
+        let decisions: [UUID: MinimumMissDecision] = [homework.id: .deduct, chores.id: .absolve]
+        XCTAssertTrue(draft.decisionsAreComplete(decisions))
+        XCTAssertEqual(draft.selectedRuleIDs(from: decisions), [homework.id])
+        XCTAssertTrue(draft.minimumMissReviewDescription(decisions).contains("Homework: Deducted 100 points"))
+        XCTAssertTrue(draft.minimumMissReviewDescription(decisions).contains("Chores: Absolved"))
+    }
+
+    func testSettlementBreakdownSeparatesAwardsPenaltiesAndPurchases() {
+        let childID = UUID()
+        let weekEnding = date(2026, 9, 12)
+        let entries = [
+            LedgerEntry(memberID: childID, weekEnding: weekEnding, title: "Helping", points: 120, kind: .reward, status: .approved, submittedBy: "Parent"),
+            LedgerEntry(memberID: childID, weekEnding: weekEnding, title: "Late", points: -30, kind: .penalty, status: .approved, submittedBy: "Parent"),
+            LedgerEntry(memberID: childID, weekEnding: weekEnding, title: "Screen Time", points: -50, kind: .purchase, status: .approved, submittedBy: "Child"),
+            LedgerEntry(memberID: childID, weekEnding: weekEnding, title: "screen time", points: -50, kind: .purchase, status: .approved, submittedBy: "Child"),
+            LedgerEntry(memberID: childID, weekEnding: weekEnding, title: "Pending", points: 999, kind: .reward, status: .pending, submittedBy: "Child")
+        ]
+
+        let breakdown = PointsEngine.settlementEntryBreakdown(
+            for: childID,
+            weekEnding: weekEnding,
+            entries: entries,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(breakdown.additionalAwards, 120)
+        XCTAssertEqual(breakdown.penalties, 30)
+        XCTAssertEqual(breakdown.purchases, [SettlementPurchaseSummary(title: "Screen Time", quantity: 2, pointsSpent: 100)])
+    }
+
     func testMinimumDeductionsIgnoreIneligibleRulesAndOtherFamilies() {
         let familyID = UUID()
         let child = FamilyMember(familyID: familyID, name: "Child", role: .child)

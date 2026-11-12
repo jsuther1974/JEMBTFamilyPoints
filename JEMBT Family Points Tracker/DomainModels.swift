@@ -85,6 +85,14 @@ enum RuleCatalog: String, Codable, CaseIterable, Identifiable {
 
 }
 
+nonisolated enum MinimumMissDecision: String, Codable, CaseIterable, Identifiable {
+    case deduct
+    case absolve
+
+    var id: Self { self }
+    var title: String { self == .deduct ? "Deduct" : "Absolve" }
+}
+
 enum RuleFrequencyKind: String, Codable, CaseIterable, Identifiable {
     case count
     case time
@@ -577,6 +585,7 @@ final class WeeklySettlement {
     var minimumMissDeductionPoints: Int = 0
 
     var minimumMissDeductionDetails: String = ""
+    var minimumMissReviewDetails: String?
     var finalPoints: Int = 0
     var cashAmount: Decimal = 0
     var debtCarriedOut: Int = 0
@@ -595,6 +604,7 @@ final class WeeklySettlement {
         minimumMissDeductionPoints: Int = 0,
 
         minimumMissDeductionDetails: String = "",
+        minimumMissReviewDetails: String? = nil,
         finalPoints: Int,
         cashAmount: Decimal,
         debtCarriedOut: Int,
@@ -612,6 +622,7 @@ final class WeeklySettlement {
         self.minimumMissDeductionPoints = minimumMissDeductionPoints
 
         self.minimumMissDeductionDetails = minimumMissDeductionDetails
+        self.minimumMissReviewDetails = minimumMissReviewDetails
         self.finalPoints = finalPoints
         self.cashAmount = cashAmount
         self.debtCarriedOut = debtCarriedOut
@@ -642,6 +653,7 @@ struct SettlementDraft: Identifiable {
     let parentPotShare: Int
 
     let minimumMissDeductions: [MinimumMissDeduction]
+    let cashValuePerPoint: Decimal
     let finalPoints: Int
     let cashAmount: Decimal
     let debtCarriedOut: Int
@@ -659,7 +671,23 @@ struct SettlementDraft: Identifiable {
     }
 
     func cashAmount(applying ruleIDs: Set<UUID>) -> Decimal {
-        Decimal(max(0, finalPoints(applying: ruleIDs))) / 100
+        Decimal(max(0, finalPoints(applying: ruleIDs))) * cashValuePerPoint
+    }
+
+    func decisionsAreComplete(_ decisions: [UUID: MinimumMissDecision]) -> Bool {
+        minimumMissDeductions.allSatisfy { decisions[$0.ruleID] != nil }
+    }
+
+    func selectedRuleIDs(from decisions: [UUID: MinimumMissDecision]) -> Set<UUID> {
+        Set(decisions.compactMap { $0.value == .deduct ? $0.key : nil })
+    }
+
+    func minimumMissReviewDescription(_ decisions: [UUID: MinimumMissDecision]) -> String {
+        minimumMissDeductions.compactMap { deduction in
+            guard let decision = decisions[deduction.ruleID] else { return nil }
+            let result = decision == .deduct ? "Deducted \(deduction.points) points" : "Absolved"
+            return "\(deduction.title): \(result)"
+        }.joined(separator: "; ")
     }
 
     func debtCarriedOut(applying ruleIDs: Set<UUID>) -> Int {
@@ -865,19 +893,26 @@ final class AllowanceFamily {
     var createdAt: Date = Date()
     var createdByAppleID: String = ""
     var isActive: Bool = true
+    var cashValuePerPoint: Decimal?
+
+    var effectiveCashValuePerPoint: Decimal {
+        max(0, cashValuePerPoint ?? Decimal(string: "0.01")!)
+    }
 
     init(
         id: UUID = UUID(),
         name: String,
         createdAt: Date = .now,
         createdByAppleID: String,
-        isActive: Bool = true
+        isActive: Bool = true,
+        cashValuePerPoint: Decimal = Decimal(string: "0.01")!
     ) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
         self.createdByAppleID = createdByAppleID
         self.isActive = isActive
+        self.cashValuePerPoint = cashValuePerPoint
     }
 }
 

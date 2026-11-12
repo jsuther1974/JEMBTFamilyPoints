@@ -10,6 +10,7 @@ struct SignInWithAppleView: View {
     @State private var invitationCode = ""
     @State private var familyName = ""
     @State private var administratorName = ""
+    @State private var cashValuePerPoint = 0.01
     @State private var showingJoin = false
     @State private var showingCreate = false
     @State private var errorMessage: String?
@@ -132,6 +133,18 @@ struct SignInWithAppleView: View {
                 TextField("Your name", text: $administratorName, onCommit: submitCreateFamily)
                     .focused($focusedCreateFamilyField, equals: .administratorName)
                     .submitLabel(.done)
+                Section {
+                    LabeledContent("1 point =") {
+                        TextField("Cash value", value: $cashValuePerPoint, format: .currency(code: "USD"))
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .accessibilityIdentifier("createFamilyCashValuePerPoint")
+                    }
+                } header: {
+                    Text("Point value")
+                } footer: {
+                    Text("Used only to show the informational cash value of points. The default is $0.01 per point.")
+                }
             }
             .navigationTitle("Create a Family")
             .toolbar {
@@ -238,12 +251,14 @@ struct SignInWithAppleView: View {
                 named: familyName.trimmingCharacters(in: .whitespacesAndNewlines),
                 administratorName: administratorName.trimmingCharacters(in: .whitespacesAndNewlines),
                 for: appleID,
+                cashValuePerPoint: Decimal(max(0, cashValuePerPoint)),
                 modelContext: modelContext
             )
             showingCreate = false
             focusedCreateFamilyField = nil
             familyName = ""
             administratorName = ""
+            cashValuePerPoint = 0.01
         } catch {
             errorMessage = "The family could not be created: \(error.localizedDescription)"
         }

@@ -105,13 +105,15 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         app.buttons["Cancel"].tap()
 
         app.openFamilyTab()
-        let familyStoreLink = app.descendants(matching: .any)["familyStorefrontLink"]
+        let familyStoreLink = app.descendants(matching: .any)["shop-Mateo"]
         XCTAssertTrue(familyStoreLink.waitForExistence(timeout: 5))
         let settlementLink = app.descendants(matching: .any)["familySettlementLink"]
         XCTAssertTrue(settlementLink.exists)
         settlementLink.tap()
         XCTAssertTrue(app.navigationBars["Weekly Settlement"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["reportingWeekPicker"].exists)
+        XCTAssertTrue(app.buttons["confirmGlobalSettlement"].exists)
+        XCTAssertFalse(app.tabBars.buttons["Settlement"].exists)
         app.navigationBars["Weekly Settlement"].buttons.firstMatch.tap()
         XCTAssertTrue(familyStoreLink.waitForExistence(timeout: 5))
         familyStoreLink.tap()
@@ -140,14 +142,15 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
 
-        let editFamilyNameButton = app.buttons["Edit family name"]
-        XCTAssertTrue(editFamilyNameButton.waitForExistence(timeout: 5), "Expected the family-name edit button to exist.")
-        editFamilyNameButton.tap()
+        let editFamilySettingsButton = app.buttons["Edit family settings"]
+        XCTAssertTrue(editFamilySettingsButton.waitForExistence(timeout: 5), "Expected the family-settings button to exist.")
+        editFamilySettingsButton.tap()
 
         XCTAssertTrue(
-            app.navigationBars["Edit Family Name"].waitForExistence(timeout: 5),
-            "Expected tapping the family-name edit button to open the editor."
+            app.navigationBars["Family Settings"].waitForExistence(timeout: 5),
+            "Expected tapping the family-settings button to open the editor."
         )
+        XCTAssertTrue(app.textFields["familyCashValuePerPoint"].exists)
     }
 
     @MainActor
@@ -176,7 +179,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         administratorNameField.typeText("\r")
 
         XCTAssertTrue(
-            app.buttons["Edit family name"].waitForExistence(timeout: 5),
+            app.buttons["Edit family settings"].waitForExistence(timeout: 5),
             "Expected Return in the final field to create the family."
         )
     }
@@ -296,7 +299,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
         let childPoints = app.staticTexts["pointsSummary-Mateo"]
         XCTAssertTrue(childPoints.waitForExistence(timeout: 5), "Expected points in Mateo's member card.")
-        XCTAssertTrue(app.staticTexts["Pending approval"].exists)
+        XCTAssertTrue(app.staticTexts["Family overview"].exists)
 
         let parentPoints = app.staticTexts["pointsSummary-Daddy"]
         for _ in 0..<4 where !parentPoints.exists {
@@ -441,7 +444,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
         app.signInAndJoinDemoFamilyIfNeeded()
 
-        XCTAssertEqual(app.tabBars.buttons.count, 5)
+        XCTAssertEqual(app.tabBars.buttons.count, 4)
         let statsLink = app.descendants(matching: .any)["familyStatisticsLink"]
         XCTAssertTrue(statsLink.waitForExistence(timeout: 5))
         statsLink.tap()

@@ -47,6 +47,20 @@ struct PendingPointTotals {
     var net: Int { earned - lost }
 }
 
+struct SettlementPurchaseSummary: Identifiable, Equatable {
+    let title: String
+    let quantity: Int
+    let pointsSpent: Int
+
+    var id: String { title.lowercased() }
+}
+
+struct SettlementEntryBreakdown: Equatable {
+    let additionalAwards: Int
+    let penalties: Int
+    let purchases: [SettlementPurchaseSummary]
+}
+
 enum PointsEngine {
 
     static let defaultLedgerSort = [
@@ -166,6 +180,36 @@ enum PointsEngine {
                 calendar.isDate($0.weekEnding, inSameDayAs: weekEnding)
             }
             .reduce(0) { $0 + $1.points }
+    }
+
+    static func settlementEntryBreakdown(
+        for memberID: UUID,
+        weekEnding: Date,
+        entries: [LedgerEntry],
+        calendar: Calendar = .current
+    ) -> SettlementEntryBreakdown {
+        let approved = entries.filter {
+            $0.memberID == memberID &&
+            $0.status == .approved &&
+            calendar.isDate($0.weekEnding, inSameDayAs: weekEnding)
+        }
+        let purchasesByTitle = Dictionary(grouping: approved.filter { $0.kind == .purchase }) {
+            $0.title.lowercased()
+        }
+        let purchases = purchasesByTitle.values.compactMap { purchaseEntries -> SettlementPurchaseSummary? in
+            guard let first = purchaseEntries.first else { return nil }
+            return SettlementPurchaseSummary(
+                title: first.title,
+                quantity: Int(purchaseEntries.reduce(0.0) { $0 + max(0, $1.quantity) }.rounded()),
+                pointsSpent: abs(purchaseEntries.reduce(0) { $0 + $1.points })
+            )
+        }.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+
+        return SettlementEntryBreakdown(
+            additionalAwards: approved.filter { $0.kind != .purchase }.reduce(0) { $0 + max(0, $1.points) },
+            penalties: approved.filter { $0.kind != .purchase }.reduce(0) { $0 + abs(min(0, $1.points)) },
+            purchases: purchases
+        )
     }
 
     static func pendingPointTotals(
@@ -608,6 +652,7 @@ enum PointsEngine {
         settlements: [WeeklySettlement],
 
         rules: [RuleTemplate] = [],
+        cashValuePerPoint: Decimal = Decimal(string: "0.01")!,
         calendar: Calendar = .current
     ) -> [SettlementDraft] {
         let shares = parentPotShares(
@@ -659,8 +704,9 @@ enum PointsEngine {
                     parentPotShare: parentShare,
 
                     minimumMissDeductions: minimumDeductions,
+                    cashValuePerPoint: max(0, cashValuePerPoint),
                     finalPoints: final,
-                    cashAmount: Decimal(payablePoints) / 100,
+                    cashAmount: Decimal(payablePoints) * max(0, cashValuePerPoint),
                     debtCarriedOut: min(0, final)
                 )
             }

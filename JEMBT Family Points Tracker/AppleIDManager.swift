@@ -69,9 +69,14 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
         named name: String,
         administratorName: String,
         for appleID: String,
+        cashValuePerPoint: Decimal = Decimal(string: "0.01")!,
         modelContext: ModelContext
     ) throws -> AllowanceFamily {
-        let family = AllowanceFamily(name: name, createdByAppleID: appleID)
+        let family = AllowanceFamily(
+            name: name,
+            createdByAppleID: appleID,
+            cashValuePerPoint: max(0, cashValuePerPoint)
+        )
         modelContext.insert(family)
         let administrator = FamilyMember(
             familyID: family.id,

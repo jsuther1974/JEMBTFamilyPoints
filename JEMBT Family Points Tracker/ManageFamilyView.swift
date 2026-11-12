@@ -62,7 +62,8 @@ struct ManageFamilyView: View {
             members: familyMembers,
             entries: familyEntries,
             settlements: settlements.filter { memberIDs.contains($0.childID) },
-            rules: rules.filter { $0.familyID == appleIDManager.currentFamily?.id }
+            rules: rules.filter { $0.familyID == appleIDManager.currentFamily?.id },
+            cashValuePerPoint: appleIDManager.currentFamily?.effectiveCashValuePerPoint ?? Decimal(string: "0.01")!
         )
     }
 
@@ -75,8 +76,33 @@ struct ManageFamilyView: View {
 
     var body: some View {
         List {
-            Section("Reporting week") {
+            Section("Family overview") {
                 ReportingWeekPicker()
+                NavigationLink {
+                    WeeklyLedgerView()
+                } label: {
+                    LabeledContent("View weekly ledger") {
+                        Text(pendingApprovalCount == 0
+                             ? "No pending submissions"
+                             : "\(pendingApprovalCount) waiting")
+                            .foregroundStyle(pendingApprovalCount == 0 ? Color.secondary : Color.orange)
+                    }
+                }
+                .accessibilityIdentifier("weeklyLedgerLink")
+                if canChooseReportingPeriod {
+                    NavigationLink {
+                        SettlementView()
+                    } label: {
+                        Label("Settle / Close Books", systemImage: "checkmark.seal.fill")
+                    }
+                    .accessibilityIdentifier("familySettlementLink")
+                }
+                NavigationLink {
+                    FamilyStatisticsView()
+                } label: {
+                    Label("Stats & Trends", systemImage: "chart.xyaxis.line")
+                }
+                .accessibilityIdentifier("familyStatisticsLink")
             }
 
             if let errorMessage {
@@ -94,43 +120,6 @@ struct ManageFamilyView: View {
                 } footer: {
                     Text("Use this only if your profile is missing after an older app-data migration.")
                 }
-            }
-
-            Section("Family insights") {
-                NavigationLink {
-                    FamilyStatisticsView()
-                } label: {
-                    Label("Stats & Trends", systemImage: "chart.xyaxis.line")
-                }
-                .accessibilityIdentifier("familyStatisticsLink")
-                NavigationLink {
-                    FamilyStorefrontView()
-                } label: {
-                    Label("Visit Family Store", systemImage: "cart.fill")
-                }
-                .accessibilityIdentifier("familyStorefrontLink")
-                if canChooseReportingPeriod {
-                    NavigationLink {
-                        SettlementView()
-                    } label: {
-                        Label("Settle / Close Books", systemImage: "checkmark.seal.fill")
-                    }
-                    .accessibilityIdentifier("familySettlementLink")
-                }
-            }
-
-            Section("Pending approval") {
-                NavigationLink {
-                    WeeklyLedgerView()
-                } label: {
-                    LabeledContent("View weekly ledger") {
-                        Text(pendingApprovalCount == 0
-                             ? "No pending submissions"
-                             : "\(pendingApprovalCount) waiting")
-                            .foregroundStyle(pendingApprovalCount == 0 ? Color.secondary : Color.orange)
-                    }
-                }
-                .accessibilityIdentifier("weeklyLedgerLink")
             }
 
             if familyMembers.isEmpty {
@@ -180,8 +169,11 @@ struct ManageFamilyView: View {
         }
         .sheet(isPresented: $showingFamilyNameEditor) {
             if let family = appleIDManager.currentFamily {
-                FamilyNameEditorView(currentName: family.name) { newName in
-                    try saveFamilyName(newName, for: family)
+                FamilySettingsEditorView(
+                    currentName: family.name,
+                    currentCashValuePerPoint: family.effectiveCashValuePerPoint
+                ) { newName, cashValuePerPoint in
+                    try saveFamilySettings(name: newName, cashValuePerPoint: cashValuePerPoint, for: family)
                 }
             }
         }
@@ -300,19 +292,22 @@ struct ManageFamilyView: View {
         Button("Edit") {
             showingFamilyNameEditor = true
         }
-        .accessibilityLabel("Edit family name")
-        .accessibilityHint("Opens a form for changing the family name.")
+        .accessibilityLabel("Edit family settings")
+        .accessibilityHint("Opens a form for changing the family name and point value.")
     }
 
-    private func saveFamilyName(_ name: String, for family: AllowanceFamily) throws {
+    private func saveFamilySettings(name: String, cashValuePerPoint: Decimal, for family: AllowanceFamily) throws {
         let previousName = family.name
+        let previousCashValue = family.cashValuePerPoint
         family.name = name
+        family.cashValuePerPoint = max(0, cashValuePerPoint)
         do {
             try modelContext.save()
             errorMessage = nil
         } catch {
             family.name = previousName
-            errorMessage = "The family name could not be saved: \(error.localizedDescription)"
+            family.cashValuePerPoint = previousCashValue
+            errorMessage = "The family settings could not be saved: \(error.localizedDescription)"
             throw error
         }
     }
@@ -573,6 +568,14 @@ private struct MemberAdministrationRow: View {
                 }
 
                 HStack(spacing: 12) {
+                    NavigationLink {
+                        FamilyStorefrontView()
+                    } label: {
+                        Label("Shop", systemImage: "cart.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("shop-\(member.name)")
+                    Spacer()
                     if let onReward {
                         Button(action: onReward) {
                             Image(systemName: EntryKind.reward.quickActionSymbolName)
@@ -676,7 +679,7 @@ private struct MemberAdministrationRow: View {
     }
 }
 
-private struct QuickActivityRequest: Identifiable {
+struct QuickActivityRequest: Identifiable {
     let member: FamilyMember
     let kind: EntryKind
     let weekEnding: Date
@@ -690,7 +693,7 @@ private struct QuickActivityDraft {
     var weekdays: Set<Int>
 }
 
-private struct QuickActivityView: View {
+struct QuickActivityView: View {
     let member: FamilyMember
     let kind: EntryKind
     let weekEnding: Date
@@ -1725,15 +1728,21 @@ private struct MemberDraft {
     var role: MemberRole = .child
 }
 
-private struct FamilyNameEditorView: View {
-    let onSave: (String) throws -> Void
+private struct FamilySettingsEditorView: View {
+    let onSave: (String, Decimal) throws -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
+    @State private var cashValuePerPoint: Double
     @State private var validationMessage: String?
 
-    init(currentName: String, onSave: @escaping (String) throws -> Void) {
+    init(
+        currentName: String,
+        currentCashValuePerPoint: Decimal,
+        onSave: @escaping (String, Decimal) throws -> Void
+    ) {
         self.onSave = onSave
         _name = State(initialValue: currentName)
+        _cashValuePerPoint = State(initialValue: NSDecimalNumber(decimal: currentCashValuePerPoint).doubleValue)
     }
 
     var body: some View {
@@ -1744,6 +1753,19 @@ private struct FamilyNameEditorView: View {
                         .textInputAutocapitalization(.words)
                 }
 
+                Section {
+                    LabeledContent("1 point =") {
+                        TextField("Cash value", value: $cashValuePerPoint, format: .currency(code: "USD"))
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .accessibilityIdentifier("familyCashValuePerPoint")
+                    }
+                } header: {
+                    Text("Point value")
+                } footer: {
+                    Text("This is an informational cash value, not a presumed payout.")
+                }
+
                 if let validationMessage {
                     Section {
                         Text(validationMessage)
@@ -1751,7 +1773,7 @@ private struct FamilyNameEditorView: View {
                     }
                 }
             }
-            .navigationTitle("Edit Family Name")
+            .navigationTitle("Family Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1772,10 +1794,10 @@ private struct FamilyNameEditorView: View {
         }
 
         do {
-            try onSave(trimmedName)
+            try onSave(trimmedName, Decimal(max(0, cashValuePerPoint)))
             dismiss()
         } catch {
-            validationMessage = "The family name could not be saved: \(error.localizedDescription)"
+            validationMessage = "The family settings could not be saved: \(error.localizedDescription)"
         }
     }
 }
