@@ -24,8 +24,8 @@ enum EntryKind: String, Codable, CaseIterable {
 
     var quickActionSymbolName: String {
         switch self {
-        case .reward: "hand.thumbsup.fill"
-        case .penalty: "hand.thumbsdown.fill"
+        case .reward: "star.circle.fill"
+        case .penalty: "exclamationmark.octagon.fill"
         case .purchase: "cart.fill"
         case .adjustment: "plusminus.circle.fill"
         }
@@ -212,6 +212,7 @@ final class FamilyMember {
     var emailAddress: String?
     var birthDate: Date?
     var sourceContactIdentifier: String?
+    @Attribute(.externalStorage) var avatarData: Data?
     var roleRawValue: String = MemberRole.child.rawValue
     var isActive: Bool = true
 
@@ -227,6 +228,7 @@ final class FamilyMember {
         emailAddress: String? = nil,
         birthDate: Date? = nil,
         sourceContactIdentifier: String? = nil,
+        avatarData: Data? = nil,
         role: MemberRole,
         isActive: Bool = true
     ) {
@@ -236,6 +238,7 @@ final class FamilyMember {
         self.emailAddress = emailAddress
         self.birthDate = birthDate
         self.sourceContactIdentifier = sourceContactIdentifier
+        self.avatarData = avatarData
         self.roleRawValue = role.rawValue
         self.isActive = isActive
     }

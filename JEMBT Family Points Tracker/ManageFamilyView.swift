@@ -3,6 +3,9 @@ import ContactsUI
 #endif
 import SwiftData
 import SwiftUI
+#if canImport(PhotosUI)
+import PhotosUI
+#endif
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)
@@ -20,12 +23,13 @@ struct ManageFamilyView: View {
     @Query private var rules: [RuleTemplate]
     @State private var showingFamilyNameEditor = false
     @State private var showingAddMember = false
-    @State private var editingMember: FamilyMember?
     @State private var memberPendingRemoval: FamilyMember?
     @State private var inviteToPresentAfterAdd: PendingInviteShare?
     @State private var pendingInviteShare: PendingInviteShare?
     @State private var errorMessage: String?
     @State private var quickActivity: QuickActivityRequest?
+    @State private var showingWeeklyLedger = false
+    @State private var showingSettlement = false
 
     private var canEdit: Bool {
         appleIDManager.currentMembership?.role.canAdministerFamily == true
@@ -77,32 +81,53 @@ struct ManageFamilyView: View {
     var body: some View {
         List {
             Section("Family overview") {
-                ReportingWeekPicker()
-                NavigationLink {
-                    WeeklyLedgerView()
-                } label: {
-                    LabeledContent("View weekly ledger") {
-                        Text(pendingApprovalCount == 0
-                             ? "No pending submissions"
-                             : "\(pendingApprovalCount) waiting")
-                            .foregroundStyle(pendingApprovalCount == 0 ? Color.secondary : Color.orange)
-                    }
-                }
-                .accessibilityIdentifier("weeklyLedgerLink")
-                if canChooseReportingPeriod {
-                    NavigationLink {
-                        SettlementView()
+                VStack(spacing: 0) {
+                    ReportingWeekPicker()
+                        .padding(.vertical, 4)
+                    Divider()
+                    Button {
+                        showingWeeklyLedger = true
                     } label: {
-                        Label("Settle / Close Books", systemImage: "checkmark.seal.fill")
+                        HStack {
+                            Text("View weekly ledger")
+                            Spacer()
+                            Text(pendingApprovalCount == 0
+                                 ? "No pending submissions"
+                                 : "\(pendingApprovalCount) waiting")
+                                .foregroundStyle(pendingApprovalCount == 0 ? Color.secondary : Color.orange)
+                            Image(systemName: "chevron.right")
+                                .font(.caption.bold())
+                                .foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                        .padding(.vertical, 12)
                     }
-                    .accessibilityIdentifier("familySettlementLink")
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("weeklyLedgerLink")
+                    if canChooseReportingPeriod {
+                        Divider()
+                        Button {
+                            showingSettlement = true
+                        } label: {
+                            HStack {
+                                Label("Settle / Close Books", systemImage: "checkmark.seal.fill")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .contentShape(Rectangle())
+                            .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("familySettlementLink")
+                    }
                 }
-                NavigationLink {
-                    FamilyStatisticsView()
-                } label: {
-                    Label("Stats & Trends", systemImage: "chart.xyaxis.line")
-                }
-                .accessibilityIdentifier("familyStatisticsLink")
+                .padding(.horizontal, 14)
+                .familyCardSurface(accent: .accentColor)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 8, trailing: 14))
             }
 
             if let errorMessage {
@@ -146,26 +171,26 @@ struct ManageFamilyView: View {
                     .clipped()
                     .overlay {
                         Rectangle()
-                            .fill(.ultraThinMaterial)
+                            .fill(.regularMaterial)
                     }
             }
             .ignoresSafeArea()
             .accessibilityHidden(true)
         }
         .navigationTitle(displayedFamilyName)
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if canEdit {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    familyNameEditButton
-                    Button {
-                        showingAddMember = true
-                    } label: {
-                        Image(systemName: "person.badge.plus")
-                    }
-                    .accessibilityLabel("Add family member")
+                ToolbarItem(placement: .primaryAction) {
+                    familyActionsMenu
                 }
             }
+        }
+        .navigationDestination(isPresented: $showingWeeklyLedger) {
+            WeeklyLedgerView()
+        }
+        .navigationDestination(isPresented: $showingSettlement) {
+            SettlementView()
         }
         .sheet(isPresented: $showingFamilyNameEditor) {
             if let family = appleIDManager.currentFamily {
@@ -183,11 +208,6 @@ struct ManageFamilyView: View {
         .sheet(isPresented: $showingAddMember, onDismiss: presentPendingInvite) {
             MemberEditorView(title: "Add Family Member") { draft in
                 try addMember(draft)
-            }
-        }
-        .sheet(item: $editingMember) { member in
-            MemberEditorView(title: "Edit Family Member", member: member) { draft in
-                try update(member, with: draft)
             }
         }
         .sheet(item: $pendingInviteShare) { invite in
@@ -223,32 +243,67 @@ struct ManageFamilyView: View {
         let roleMembers = familyMembers.filter { $0.role == role }
         if !roleMembers.isEmpty {
             Section(title) {
-                ForEach(roleMembers) { member in
-                    MemberAdministrationRow(
-                        member: member,
-                        points: member.role.participatesInPoints ? pointsSummary(for: member) : nil,
-                        invitation: pendingInvitation(for: member),
-                        canEdit: canEdit,
-                        isCurrentMember: member.id == appleIDManager.currentFamilyMember?.id,
-                        onReward: member.role == .child
-                            ? { quickActivity = QuickActivityRequest(member: member, kind: .reward, weekEnding: weekEnding) }
-                            : nil,
-                        onPenalty: member.role.participatesInPoints
-                            ? { quickActivity = QuickActivityRequest(member: member, kind: .penalty, weekEnding: weekEnding) }
-                            : nil,
-                        onGenerateCode: { generateCode(for: member) },
-                        onEdit: { editingMember = member }
-                    )
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        if canEdit {
-                            Button("Remove", role: .destructive) {
-                                memberPendingRemoval = member
+                ScrollView(.horizontal) {
+                    LazyHStack(spacing: 12) {
+                        ForEach(roleMembers) { member in
+                            MemberAdministrationRow(
+                                member: member,
+                                points: member.role.participatesInPoints ? pointsSummary(for: member) : nil,
+                                invitation: pendingInvitation(for: member),
+                                canEdit: canEdit,
+                                isCurrentMember: member.id == appleIDManager.currentFamilyMember?.id,
+                                onReward: member.role == .child
+                                    ? { quickActivity = QuickActivityRequest(member: member, kind: .reward, weekEnding: weekEnding) }
+                                    : nil,
+                                onPenalty: member.role.participatesInPoints
+                                    ? { quickActivity = QuickActivityRequest(member: member, kind: .penalty, weekEnding: weekEnding) }
+                                    : nil,
+                                onGenerateCode: { generateCode(for: member) },
+                                onShareInvitation: { invitation in
+                                    pendingInviteShare = PendingInviteShare(invitation: invitation, memberName: member.name)
+                                },
+                                onSave: { draft in try update(member, with: draft) }
+                            )
+                            .containerRelativeFrame(.horizontal, count: 1, span: 1, spacing: 12)
+                            .scrollTransition(.interactive.threshold(.visible(0.72))) { card, phase in
+                                card
+                                    .scaleEffect(phase.isIdentity ? 1 : 0.91)
+                                    .opacity(phase.isIdentity ? 1 : 0.72)
+                            }
+                            .contextMenu {
+                                if canEdit {
+                                    Button("Remove family member", systemImage: "person.crop.circle.badge.minus", role: .destructive) {
+                                        memberPendingRemoval = member
+                                    }
+                                }
                             }
                         }
                     }
+                    .scrollTargetLayout()
                 }
+                .scrollIndicators(.hidden)
+                .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
+                .contentMargins(.horizontal, 2, for: .scrollContent)
+                .frame(height: 205)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 2, leading: 14, bottom: 8, trailing: 14))
             }
         }
+    }
+
+    private var familyActionsMenu: some View {
+        Menu {
+            Button("Edit family settings", systemImage: "slider.horizontal.3") {
+                showingFamilyNameEditor = true
+            }
+            Button("Add family member", systemImage: "person.badge.plus") {
+                showingAddMember = true
+            }
+        } label: {
+            Label("Family actions", systemImage: "ellipsis.circle")
+        }
+        .accessibilityIdentifier("familyActions")
     }
 
     private func pointsSummary(for member: FamilyMember) -> MemberPointsSummary {
@@ -288,14 +343,6 @@ struct ManageFamilyView: View {
         return name.isEmpty ? "My Family" : name
     }
 
-    private var familyNameEditButton: some View {
-        Button("Edit") {
-            showingFamilyNameEditor = true
-        }
-        .accessibilityLabel("Edit family settings")
-        .accessibilityHint("Opens a form for changing the family name and point value.")
-    }
-
     private func saveFamilySettings(name: String, cashValuePerPoint: Decimal, for family: AllowanceFamily) throws {
         let previousName = family.name
         let previousCashValue = family.cashValuePerPoint
@@ -330,6 +377,7 @@ struct ManageFamilyView: View {
             emailAddress: draft.emailAddress,
             birthDate: draft.birthDate,
             sourceContactIdentifier: draft.sourceContactIdentifier,
+            avatarData: draft.avatarData,
             role: draft.role,
             modelContext: modelContext
         )
@@ -436,6 +484,7 @@ private struct InviteShareSheet: View {
             name: draft.name,
             emailAddress: draft.emailAddress,
             birthDate: draft.birthDate,
+            avatarData: draft.avatarData,
             role: draft.role,
             modelContext: modelContext
         )
@@ -511,70 +560,106 @@ private struct MemberAdministrationRow: View {
     let onReward: (() -> Void)?
     let onPenalty: (() -> Void)?
     let onGenerateCode: () -> Void
-    let onEdit: () -> Void
+    let onShareInvitation: (FamilyInvitation) -> Void
+    let onSave: (MemberDraft) throws -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(memberDisplayName)
-                        .font(.headline)
-                }
-                Spacer()
-                if let points {
-                    Text("\((points.balance ?? points.net).formatted()) pts")
-                        .font(.title3.bold())
-                }
-                if !member.isActive {
-                    Text("Inactive")
-                        .font(.caption.bold())
-                        .foregroundStyle(.secondary)
-                }
-                if canEdit {
-                    Button(action: onEdit) {
-                        Image(systemName: "ellipsis.circle")
+        VStack(alignment: .leading, spacing: 10) {
+            NavigationLink {
+                MemberDetailView(
+                    member: member,
+                    points: points,
+                    invitation: invitation,
+                    canEdit: canEdit,
+                    isCurrentMember: isCurrentMember,
+                    onSave: onSave
+                )
+            } label: {
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack(spacing: 10) {
+                        MemberAvatarView(member: member, size: 48)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(member.name).font(.headline)
+                                if isCurrentMember {
+                                    Text("ME")
+                                        .font(.caption2.bold())
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(accentColor.opacity(0.18), in: Capsule())
+                                        .accessibilityIdentifier("currentMemberBadge-\(member.name)")
+                                }
+                            }
+                            Text(ageDescription)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let birthdayDescription {
+                                Text(birthdayDescription)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        if let points {
+                            Text("\((points.balance ?? points.net).formatted()) pts")
+                                .font(.title3.bold())
+                                .foregroundStyle(accentColor)
+                        }
                     }
-                    .accessibilityLabel("Edit \(member.name)")
+
+                    if let points {
+                        if let base = points.base {
+                            Text("Base \(base.formatted())  •  Earned +\(points.earned.formatted())  •  Lost -\(points.lost.formatted())")
+                                .accessibilityIdentifier("pointsSummary-\(member.name)")
+                        } else {
+                            Text("Earned +\(points.earned.formatted())  •  Lost -\(points.lost.formatted())")
+                                .accessibilityIdentifier("pointsSummary-\(member.name)")
+                        }
+                        if points.debt != 0 || points.parentPotShare != 0 {
+                            Text("Debt \(points.debt.formatted())  •  Parent pot +\(points.parentPotShare.formatted())")
+                        }
+                        if points.pendingCount > 0 {
+                            Label(
+                                "Waiting approval: +\(points.pendingEarned.formatted()) earned  •  -\(points.pendingLost.formatted()) lost",
+                                systemImage: "clock.fill"
+                            )
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("pendingPoints-\(member.name)")
+                        }
+                    }
+
+                    if let email = member.emailAddress, !email.isEmpty {
+                        Label(email, systemImage: "envelope")
+                    }
                 }
             }
+            .buttonStyle(.plain)
+            .font(.caption)
+            .foregroundStyle(.primary)
+            .accessibilityIdentifier("memberCard-\(member.name)")
+            .accessibilityValue(isCurrentMember ? "Current member" : "")
 
-            if let points {
-                if let base = points.base {
-                    Text("Base \(base.formatted())  •  Earned +\(points.earned.formatted())  •  Lost -\(points.lost.formatted())")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("pointsSummary-\(member.name)")
-                    if points.debt != 0 || points.parentPotShare != 0 {
-                        Text("Debt \(points.debt.formatted())  •  Parent pot +\(points.parentPotShare.formatted())")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text("Earned +\(points.earned.formatted())  •  Lost -\(points.lost.formatted())")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("pointsSummary-\(member.name)")
-                }
-
-                if points.pendingCount > 0 {
-                    Label {
-                        Text("Waiting approval: +\(points.pendingEarned.formatted()) earned  •  -\(points.pendingLost.formatted()) lost")
-                    } icon: {
-                        Image(systemName: "clock.fill")
-                    }
-                    .font(.caption.bold())
-                    .foregroundStyle(.orange)
-                    .accessibilityIdentifier("pendingPoints-\(member.name)")
-                }
-
+            if hasActions {
+                Divider().overlay(accentColor.opacity(0.35))
                 HStack(spacing: 12) {
-                    NavigationLink {
-                        FamilyStorefrontView()
-                    } label: {
-                        Label("Shop", systemImage: "cart.fill")
+                    if !isCurrentMember {
+                        if let invitation {
+                            Text("Invite: \(invitation.code)")
+                                .font(.caption.monospaced().bold())
+                            Button {
+                                onShareInvitation(invitation)
+                            } label: {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.body)
+                            }
+                            .accessibilityLabel("Share invitation for \(member.name)")
+                        } else if canEdit {
+                            Button("Create invite", action: onGenerateCode)
+                                .font(.caption)
+                                .accessibilityLabel("Create invitation for \(member.name)")
+                        }
                     }
-                    .buttonStyle(.bordered)
-                    .accessibilityIdentifier("shop-\(member.name)")
                     Spacer()
                     if let onReward {
                         Button(action: onReward) {
@@ -600,48 +685,35 @@ private struct MemberAdministrationRow: View {
                     }
                 }
             }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
+        .familyCardSurface(accent: accentColor)
+    }
 
-            if let email = member.emailAddress, !email.isEmpty {
-                Text(email)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+    private var ageDescription: String {
+        if let age = member.currentAge {
+            return "Age \(age)"
+        }
+        return "No birthdate"
+    }
 
-            if !isCurrentMember {
-                HStack {
-                    if let invitation {
-                        Text("Invite code: \(invitation.code)")
-                            .font(.caption.monospaced().bold())
-                        Spacer()
-                        ShareLink(
-                            item: invitationMessage(invitation),
-                            subject: Text(invitationSubject)
-                        ) {
-                            Label("Share invitation", systemImage: "square.and.arrow.up")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("Share invitation for \(member.name)")
-                    } else if canEdit {
-                        Button("Generate invitation code", action: onGenerateCode)
-                            .font(.caption)
-                    }
-                }
-            }
+    private var birthdayDescription: String? {
+        guard member.role == .child,
+              let days = PointsEngine.daysUntilNextBirthday(from: member.birthDate) else { return nil }
+        return days == 0 ? "Birthday today" : "Birthday in \(days) \(days == 1 ? "day" : "days")"
+    }
+
+    private var accentColor: Color {
+        switch member.role {
+        case .child: .blue
+        case .parent: .purple
+        case .caregiver: .teal
         }
     }
 
-    private var memberDisplayName: String {
-        var name = member.name
-        if isCurrentMember {
-            name += " (me)"
-        }
-        if let age = member.currentAge {
-            name += " – \(age) \(age == 1 ? "year" : "years") old"
-        } else {
-            name += " – No birthdate"
-        }
-        return name
+    private var hasActions: Bool {
+        onReward != nil || onPenalty != nil || (!isCurrentMember && (invitation != nil || canEdit))
     }
 
     private var invitationSubject: String {
@@ -676,6 +748,169 @@ private struct MemberAdministrationRow: View {
         lines.append("")
         lines.append("Open the allowance app, sign in, choose to join a family, and enter the invitation code above.")
         return lines.joined(separator: "\n")
+    }
+}
+
+private struct MemberDetailView: View {
+    let member: FamilyMember
+    let points: MemberPointsSummary?
+    let invitation: FamilyInvitation?
+    let canEdit: Bool
+    let isCurrentMember: Bool
+    let onSave: (MemberDraft) throws -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(ReportingPeriod.self) private var reportingPeriod
+    @Query private var entries: [LedgerEntry]
+    @State private var showingEditor = false
+
+    private var insights: MemberActivityInsights {
+        StatisticsEngine.memberInsights(
+            memberID: member.id,
+            entries: entries,
+            endingAt: reportingPeriod.weekEnding
+        )
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack {
+                        Spacer()
+                        MemberAvatarView(member: member, size: 124)
+                            .accessibilityIdentifier("memberDetailAvatar-\(member.name)")
+                        Spacer()
+                    }
+                    .listRowBackground(Color.clear)
+                }
+                Section("Profile") {
+                    LabeledContent("Name", value: member.name)
+                    if let email = member.emailAddress, !email.isEmpty {
+                        LabeledContent("Email", value: email)
+                    }
+                    if let birthDate = member.birthDate {
+                        LabeledContent("Birthdate", value: birthDate.formatted(date: .long, time: .omitted))
+                    }
+                    if let age = member.currentAge {
+                        LabeledContent("Age", value: "Age \(age)")
+                    }
+                    if member.role == .child,
+                       let days = PointsEngine.daysUntilNextBirthday(from: member.birthDate) {
+                        LabeledContent(
+                            "Next birthday",
+                            value: days == 0 ? "Today" : "In \(days) \(days == 1 ? "day" : "days")"
+                        )
+                    }
+                    if isCurrentMember {
+                        Label("This is your profile", systemImage: "person.crop.circle.badge.checkmark")
+                            .foregroundStyle(.tint)
+                    }
+                }
+
+                if let points {
+                    Section("This week") {
+                        LabeledContent("Current points", value: "\((points.balance ?? points.net).formatted())")
+                        if let base = points.base {
+                            LabeledContent("Starting points", value: "\(base.formatted())")
+                        }
+                        LabeledContent("Earned", value: "+\(points.earned.formatted())")
+                        LabeledContent("Lost", value: "-\(points.lost.formatted())")
+                        if points.pendingCount > 0 {
+                            LabeledContent("Waiting approval", value: "\(points.pendingCount)")
+                        }
+                    }
+                }
+
+                if member.role == .child {
+                    Section("Activity trends") {
+                        LabeledContent("Active weeks", value: insights.activeWeeks.formatted())
+                        LabeledContent("Average weekly net", value: formattedAverage(insights.averageWeeklyNet))
+                        LabeledContent("Recent 4-week average", value: formattedAverage(insights.recentFourWeekAverage))
+                        LabeledContent("Trend vs previous 4 weeks", value: formattedAverage(insights.trendFromPreviousFourWeeks))
+                    }
+
+                    Section("Last week") {
+                        insightRow(label: "Top award", summary: insights.topAwardLastWeek, pointsPrefix: "+")
+                        insightRow(label: "Largest loss", summary: insights.topPenaltyLastWeek, pointsPrefix: "-")
+                    }
+
+                    if !insights.frequentAwards.isEmpty {
+                        Section("Most frequent awards") {
+                            ForEach(insights.frequentAwards) { summary in
+                                activitySummaryRow(summary, pointsPrefix: "+")
+                            }
+                        }
+                    }
+
+                    if !insights.frequentPurchases.isEmpty {
+                        Section("Store favorites") {
+                            ForEach(insights.frequentPurchases) { summary in
+                                activitySummaryRow(summary, pointsPrefix: "-")
+                            }
+                        }
+                    }
+                }
+
+                if !isCurrentMember, let invitation {
+                    Section("Invitation") {
+                        LabeledContent("Code", value: invitation.code)
+                        if let expiresAt = invitation.expiresAt {
+                            LabeledContent("Expires", value: expiresAt.formatted(date: .abbreviated, time: .shortened))
+                        }
+                    }
+                }
+            }
+            .navigationTitle(member.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+                if canEdit {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Edit") { showingEditor = true }
+                            .accessibilityIdentifier("editMemberFromDetails")
+                    }
+                }
+            }
+            .sheet(isPresented: $showingEditor) {
+                MemberEditorView(title: "Edit Family Member", member: member, onSave: onSave)
+            }
+        }
+        .accessibilityIdentifier("memberDetails-\(member.name)")
+    }
+
+    @ViewBuilder
+    private func insightRow(
+        label: String,
+        summary: MemberActivityItemSummary?,
+        pointsPrefix: String
+    ) -> some View {
+        if let summary {
+            LabeledContent(label) {
+                Text("\(summary.title)  \(pointsPrefix)\(summary.points.formatted()) pts")
+                    .multilineTextAlignment(.trailing)
+            }
+        } else {
+            LabeledContent(label, value: "None")
+        }
+    }
+
+    private func activitySummaryRow(
+        _ summary: MemberActivityItemSummary,
+        pointsPrefix: String
+    ) -> some View {
+        HStack {
+            Text(summary.title)
+            Spacer()
+            Text("\(summary.count)×  •  \(pointsPrefix)\(summary.points.formatted()) pts")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func formattedAverage(_ value: Double) -> String {
+        String(format: "%+.1f pts", value)
     }
 }
 
@@ -1725,6 +1960,7 @@ private struct MemberDraft {
     var emailAddress = ""
     var birthDate: Date?
     var sourceContactIdentifier: String?
+    var avatarData: Data?
     var role: MemberRole = .child
 }
 
@@ -1809,6 +2045,9 @@ private struct MemberEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: MemberDraft
     @State private var validationMessage: String?
+#if canImport(PhotosUI)
+    @State private var selectedAvatarItem: PhotosPickerItem?
+#endif
     @FocusState private var focusedField: Field?
 #if canImport(ContactsUI) && canImport(UIKit)
     @State private var showingContactPicker = false
@@ -1843,6 +2082,7 @@ private struct MemberEditorView: View {
             emailAddress: member?.emailAddress ?? "",
             birthDate: member?.birthDate,
             sourceContactIdentifier: member?.sourceContactIdentifier,
+            avatarData: member?.avatarData,
             role: member?.role ?? defaultRole
         ))
     }
@@ -1870,6 +2110,40 @@ private struct MemberEditorView: View {
                     }
                 }
 #endif
+
+                Section {
+                    HStack {
+                        Spacer()
+                        MemberAvatarView(
+                            avatarData: draft.avatarData,
+                            name: draft.name,
+                            role: draft.role,
+                            size: 104
+                        )
+                        Spacer()
+                    }
+#if canImport(PhotosUI)
+                    PhotosPicker(selection: $selectedAvatarItem, matching: .images) {
+                        Label(
+                            draft.avatarData == nil ? "Choose Avatar" : "Change Avatar",
+                            systemImage: "photo.badge.plus"
+                        )
+                    }
+                    .accessibilityIdentifier("chooseMemberAvatar")
+#endif
+                    if draft.avatarData != nil {
+                        Button("Remove Avatar", role: .destructive) {
+                            draft.avatarData = nil
+#if canImport(PhotosUI)
+                            selectedAvatarItem = nil
+#endif
+                        }
+                    }
+                } header: {
+                    Text("Avatar")
+                } footer: {
+                    Text("Choose a photo, Memoji, or other image. Initials are shown until an avatar is selected.")
+                }
 
                 Section {
                     TextField("Name", text: $draft.name)
@@ -1973,6 +2247,13 @@ private struct MemberEditorView: View {
                 guard !Task.isCancelled else { return }
                 focusedField = .name
             }
+#if canImport(PhotosUI)
+            .task(id: selectedAvatarItem) {
+                guard let selectedAvatarItem,
+                      let data = try? await selectedAvatarItem.loadTransferable(type: Data.self) else { return }
+                draft.avatarData = normalizedAvatarData(data)
+            }
+#endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -2076,6 +2357,116 @@ private struct MemberEditorView: View {
             role: draft.role,
             weekEnding: PointsEngine.weekEnding(containing: .now)
         )
+    }
+
+    private func normalizedAvatarData(_ data: Data) -> Data? {
+        #if canImport(UIKit)
+        guard let image = UIImage(data: data) else { return nil }
+        let maximumDimension: CGFloat = 512
+        let scale = min(1, maximumDimension / max(image.size.width, image.size.height))
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let resized = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+        return resized.jpegData(compressionQuality: 0.82)
+        #else
+        return data
+        #endif
+    }
+}
+
+private struct MemberAvatarView: View {
+    let avatarData: Data?
+    let name: String
+    let role: MemberRole
+    let size: CGFloat
+
+    init(member: FamilyMember, size: CGFloat) {
+        avatarData = member.avatarData
+        name = member.name
+        role = member.role
+        self.size = size
+    }
+
+    init(avatarData: Data?, name: String, role: MemberRole, size: CGFloat) {
+        self.avatarData = avatarData
+        self.name = name
+        self.role = role
+        self.size = size
+    }
+
+    var body: some View {
+        Group {
+            if let avatarImage {
+                avatarImage
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                ZStack {
+                    Circle().fill(accentColor.gradient)
+                    Text(initials)
+                        .font(.system(size: size * 0.34, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay { Circle().stroke(.white.opacity(0.9), lineWidth: max(1, size * 0.025)) }
+        .shadow(color: .black.opacity(0.16), radius: size * 0.04, y: size * 0.02)
+        .accessibilityLabel("Avatar for \(name.isEmpty ? "family member" : name)")
+    }
+
+    private var avatarImage: Image? {
+        guard let avatarData else { return nil }
+        #if canImport(UIKit)
+        return UIImage(data: avatarData).map(Image.init(uiImage:))
+        #elseif canImport(AppKit)
+        return NSImage(data: avatarData).map(Image.init(nsImage:))
+        #else
+        return nil
+        #endif
+    }
+
+    private var initials: String {
+        let letters = name.split(whereSeparator: { $0.isWhitespace }).prefix(2).compactMap(\.first)
+        return letters.isEmpty ? "?" : String(letters).uppercased()
+    }
+
+    private var accentColor: Color {
+        switch role {
+        case .child: .blue
+        case .parent: .purple
+        case .caregiver: .teal
+        }
+    }
+}
+
+private struct FamilyCardSurface: ViewModifier {
+    let accent: Color
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemGroupedBackground))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .fill(accent.opacity(0.045))
+                    }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(accent.opacity(0.28), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+    }
+}
+
+private extension View {
+    func familyCardSurface(accent: Color) -> some View {
+        modifier(FamilyCardSurface(accent: accent))
     }
 }
 

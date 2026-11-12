@@ -66,11 +66,16 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
     @MainActor
     func testCurrentMemberRowDoesNotShowInviteActions() throws {
         let app = XCUIApplication()
+        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-current-member-\(UUID().uuidString)@local"
         app.launch()
 
-        app.signInAndJoinDemoFamilyIfNeeded()
+        app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
-        app.assertCurrentMemberCannotInvite()
+
+        let currentMemberCard = app.buttons["memberCard-UI Test Admin"]
+        XCTAssertTrue(currentMemberCard.waitForExistence(timeout: 8), "Expected the current administrator's member card.")
+        XCTAssertFalse(app.buttons["Create invitation for UI Test Admin"].exists)
+        XCTAssertFalse(app.buttons["Share invitation for UI Test Admin"].exists)
     }
 
     @MainActor
@@ -105,8 +110,17 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         app.buttons["Cancel"].tap()
 
         app.openFamilyTab()
-        let familyStoreLink = app.descendants(matching: .any)["shop-Mateo"]
-        XCTAssertTrue(familyStoreLink.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'shop-'")).firstMatch.exists)
+        let mateoCard = app.buttons["memberCard-Mateo"]
+        XCTAssertTrue(mateoCard.waitForExistence(timeout: 5))
+        mateoCard.tap()
+        XCTAssertTrue(app.navigationBars["Mateo"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.descendants(matching: .any)["storefrontSign"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["memberDetailAvatar-Mateo"].exists)
+        XCTAssertFalse(app.navigationBars["Send Invitation"].exists, "The card itself must not open invitation sharing.")
+        XCTAssertTrue(app.staticTexts["Activity trends"].exists)
+        app.buttons["Done"].tap()
+
         let settlementLink = app.descendants(matching: .any)["familySettlementLink"]
         XCTAssertTrue(settlementLink.exists)
         settlementLink.tap()
@@ -115,8 +129,10 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(app.buttons["confirmGlobalSettlement"].exists)
         XCTAssertFalse(app.tabBars.buttons["Settlement"].exists)
         app.navigationBars["Weekly Settlement"].buttons.firstMatch.tap()
-        XCTAssertTrue(familyStoreLink.waitForExistence(timeout: 5))
-        familyStoreLink.tap()
+
+        let storeTabAgain = app.tabBars.buttons["Store"]
+        XCTAssertTrue(storeTabAgain.waitForExistence(timeout: 5))
+        storeTabAgain.tap()
         XCTAssertTrue(app.descendants(matching: .any)["storefrontSign"].waitForExistence(timeout: 5))
     }
 
@@ -142,6 +158,9 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
 
+        let familyActions = app.descendants(matching: .any)["familyActions"]
+        XCTAssertTrue(familyActions.waitForExistence(timeout: 5))
+        familyActions.tap()
         let editFamilySettingsButton = app.buttons["Edit family settings"]
         XCTAssertTrue(editFamilySettingsButton.waitForExistence(timeout: 5), "Expected the family-settings button to exist.")
         editFamilySettingsButton.tap()
@@ -151,6 +170,16 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
             "Expected tapping the family-settings button to open the editor."
         )
         XCTAssertTrue(app.textFields["familyCashValuePerPoint"].exists)
+        app.buttons["Cancel"].tap()
+
+        let adminCard = app.buttons["memberCard-UI Test Admin"]
+        XCTAssertTrue(adminCard.waitForExistence(timeout: 5))
+        adminCard.tap()
+        XCTAssertTrue(app.navigationBars["UI Test Admin"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["memberDetailAvatar-UI Test Admin"].exists)
+        XCTAssertTrue(app.buttons["editMemberFromDetails"].exists)
+        app.buttons["editMemberFromDetails"].tap()
+        XCTAssertTrue(app.buttons["chooseMemberAvatar"].waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -179,7 +208,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         administratorNameField.typeText("\r")
 
         XCTAssertTrue(
-            app.buttons["Edit family settings"].waitForExistence(timeout: 5),
+            app.buttons["familyActions"].waitForExistence(timeout: 5),
             "Expected Return in the final field to create the family."
         )
     }
@@ -192,7 +221,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
         app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
-        app.buttons["Add family member"].tap()
+        app.openAddMemberEditor()
 
         XCTAssertTrue(app.navigationBars["Add Family Member"].waitForExistence(timeout: 5))
         let birthdateField = app.textFields["Birthdate"]
@@ -208,7 +237,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
         app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
-        app.buttons["Add family member"].tap()
+        app.openAddMemberEditor()
 
         let nameField = app.textFields["Name"]
         XCTAssertTrue(nameField.waitForExistence(timeout: 5))
@@ -227,7 +256,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
         app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
-        app.buttons["Add family member"].tap()
+        app.openAddMemberEditor()
 
         let nameField = app.textFields["Name"]
         let emailField = app.textFields["Email address (optional)"]
@@ -259,9 +288,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
         app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
-        let addButton = app.buttons["Add family member"]
-        XCTAssertTrue(addButton.waitForExistence(timeout: 5))
-        addButton.tap()
+        app.openAddMemberEditor()
 
         let nameField = app.textFields["Name"]
         XCTAssertTrue(nameField.waitForExistence(timeout: 5))
@@ -307,9 +334,10 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         }
         XCTAssertTrue(parentPoints.waitForExistence(timeout: 5), "Expected points in Daddy's member card.")
 
-        for redundantRole in ["Child", "Parent", "Caregiver"] {
-            XCTAssertFalse(app.staticTexts[redundantRole].exists, "Expected section headings, not a redundant \(redundantRole) label in each card.")
-        }
+        let mateoCard = app.buttons["memberCard-Mateo"]
+        let daddyCard = app.buttons["memberCard-Daddy"]
+        XCTAssertFalse(mateoCard.label.contains("Child"), "Expected the Children heading, not a role label in Mateo's card.")
+        XCTAssertFalse(daddyCard.label.contains("Parent"), "Expected the Parents heading, not a role label in Daddy's card.")
         XCTAssertFalse(app.tabBars.buttons["Dashboard"].exists)
     }
 
@@ -438,16 +466,16 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
     }
 
     @MainActor
-    func testFamilyStatisticsPageIsAvailableWithoutAddingASixthTab() throws {
+    func testFamilyStatisticsPageIsAvailableAsTopLevelTab() throws {
         let app = XCUIApplication()
         app.launch()
 
         app.signInAndJoinDemoFamilyIfNeeded()
 
-        XCTAssertEqual(app.tabBars.buttons.count, 4)
-        let statsLink = app.descendants(matching: .any)["familyStatisticsLink"]
-        XCTAssertTrue(statsLink.waitForExistence(timeout: 5))
-        statsLink.tap()
+        XCTAssertEqual(app.tabBars.buttons.count, 5)
+        let statsTab = app.tabBars.buttons["Stats"]
+        XCTAssertTrue(statsTab.waitForExistence(timeout: 5))
+        statsTab.tap()
 
         XCTAssertTrue(app.navigationBars["Stats & Trends"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["familyStatisticsPage"].exists)
@@ -580,32 +608,8 @@ private extension XCUIApplication {
     }
 
     @MainActor
-    func assertCurrentMemberCannotInvite() {
-        let meLabelPredicate = NSPredicate(format: "label CONTAINS '(me)'")
-        let meLabelElement = staticTexts.matching(meLabelPredicate).firstMatch
-        for _ in 0..<4 where !meLabelElement.exists {
-            swipeUp()
-        }
-        XCTAssertTrue(meLabelElement.waitForExistence(timeout: 8), "Expected a member row marked as '(me)'.")
-
-        let meLabel = meLabelElement.label
-        let meRow = cells.containing(.staticText, identifier: meLabel).firstMatch
-        XCTAssertTrue(meRow.waitForExistence(timeout: 3), "Expected to find the row for the current member.")
-
-        XCTAssertFalse(meRow.buttons["Generate invitation code"].exists)
-        XCTAssertFalse(meRow.buttons["Share invitation"].exists)
-
-        let name = meLabel.components(separatedBy: " (me)").first ?? ""
-        if !name.isEmpty {
-            XCTAssertFalse(buttons["Share invitation for \(name)"].exists)
-        }
-    }
-
-    @MainActor
     func addMemberNamedForInviteSheetVerification() {
-        let addButton = buttons["Add family member"]
-        XCTAssertTrue(addButton.waitForExistence(timeout: 5), "Expected add member button to exist.")
-        addButton.tap()
+        openAddMemberEditor()
 
         XCTAssertTrue(navigationBars["Add Family Member"].waitForExistence(timeout: 5))
 
@@ -621,6 +625,16 @@ private extension XCUIApplication {
         let saveButton = navigationBars["Add Family Member"].buttons["Save"]
         XCTAssertTrue(saveButton.exists, "Expected save button in add member sheet.")
         saveButton.tap()
+    }
+
+    @MainActor
+    func openAddMemberEditor() {
+        let familyActions = descendants(matching: .any)["familyActions"]
+        XCTAssertTrue(familyActions.waitForExistence(timeout: 5), "Expected Family actions menu to exist.")
+        familyActions.tap()
+        let addButton = buttons["Add family member"]
+        XCTAssertTrue(addButton.waitForExistence(timeout: 5), "Expected add member button to exist.")
+        addButton.tap()
     }
 
     @MainActor

@@ -141,6 +141,30 @@ enum PointsEngine {
         ).year
     }
 
+    static func daysUntilNextBirthday(
+        from birthDate: Date?,
+        after date: Date = .now,
+        calendar: Calendar = .current
+    ) -> Int? {
+        guard let birthDate else { return nil }
+        let birthComponents = calendar.dateComponents([.month, .day], from: birthDate)
+        guard let month = birthComponents.month, let day = birthComponents.day else { return nil }
+        let today = calendar.startOfDay(for: date)
+        let currentYear = calendar.component(.year, from: today)
+
+        func birthday(in year: Int) -> Date? {
+            guard let monthDate = calendar.date(from: DateComponents(year: year, month: month, day: 1)),
+                  let dayRange = calendar.range(of: .day, in: .month, for: monthDate) else { return nil }
+            return calendar.date(from: DateComponents(year: year, month: month, day: min(day, dayRange.count)))
+                .map(calendar.startOfDay(for:))
+        }
+
+        guard let thisYear = birthday(in: currentYear) else { return nil }
+        let nextBirthday = thisYear >= today ? thisYear : birthday(in: currentYear + 1)
+        guard let nextBirthday else { return nil }
+        return calendar.dateComponents([.day], from: today, to: nextBirthday).day
+    }
+
     static func startingPoints(
         for member: FamilyMember,
         weekEnding: Date,

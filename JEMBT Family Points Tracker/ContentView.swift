@@ -22,6 +22,11 @@ struct ContentView: View {
                 .tabItem { Label("Ledger", systemImage: "tablecells") }
                 .tag("ledger")
             NavigationStack {
+                FamilyStatisticsView()
+            }
+                .tabItem { Label("Stats", systemImage: "chart.xyaxis.line") }
+                .tag("statistics")
+            NavigationStack {
                 ManageFamilyView()
             }
             .tabItem { Label("Family", systemImage: "person.3.fill") }

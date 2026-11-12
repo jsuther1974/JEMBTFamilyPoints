@@ -134,6 +134,7 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
         emailAddress: String?,
         birthDate: Date?,
         sourceContactIdentifier: String? = nil,
+        avatarData: Data? = nil,
         role: MemberRole,
         modelContext: ModelContext,
         shouldCreateInvitation: Bool = true
@@ -153,6 +154,7 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
             emailAddress: emailAddress?.nilIfBlank,
             birthDate: birthDate,
             sourceContactIdentifier: sourceContactIdentifier?.nilIfBlank,
+            avatarData: avatarData,
             role: role
         )
         modelContext.insert(member)
@@ -174,6 +176,7 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
         name: String,
         emailAddress: String?,
         birthDate: Date?,
+        avatarData: Data?,
         role: MemberRole,
         modelContext: ModelContext
     ) throws {
@@ -190,6 +193,7 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
         member.name = name
         member.emailAddress = emailAddress?.nilIfBlank
         member.birthDate = birthDate
+        member.avatarData = avatarData
         member.role = role
         try modelContext.save()
     }

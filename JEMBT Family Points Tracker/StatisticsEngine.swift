@@ -56,7 +56,84 @@ struct MemberYearActivity: Identifiable {
     var id: UUID { memberID }
 }
 
+struct MemberActivityItemSummary: Identifiable, Equatable {
+    let title: String
+    let count: Int
+    let points: Int
+
+    var id: String { title.lowercased() }
+}
+
+struct MemberActivityInsights: Equatable {
+    let activeWeeks: Int
+    let averageWeeklyNet: Double
+    let recentFourWeekAverage: Double
+    let trendFromPreviousFourWeeks: Double
+    let topAwardLastWeek: MemberActivityItemSummary?
+    let topPenaltyLastWeek: MemberActivityItemSummary?
+    let frequentAwards: [MemberActivityItemSummary]
+    let frequentPurchases: [MemberActivityItemSummary]
+}
+
 enum StatisticsEngine {
+    static func memberInsights(
+        memberID: UUID,
+        entries: [LedgerEntry],
+        endingAt weekEnding: Date,
+        calendar: Calendar = .current
+    ) -> MemberActivityInsights {
+        let approved = entries.filter { $0.memberID == memberID && $0.status == .approved }
+        let performanceEntries = approved.filter { $0.kind != .purchase }
+        let activeWeeks = Set(performanceEntries.map { calendar.startOfDay(for: $0.weekEnding) }).count
+        let lifetimeNet = performanceEntries.reduce(0) { $0 + $1.points }
+        let averageWeeklyNet = Double(lifetimeNet) / Double(max(1, activeWeeks))
+        let normalizedWeekEnding = PointsEngine.weekEnding(containing: weekEnding, calendar: calendar)
+        let recentWeekEndings = (0..<4).compactMap {
+            calendar.date(byAdding: .day, value: -7 * $0, to: normalizedWeekEnding)
+        }
+        let previousWeekEndings = (4..<8).compactMap {
+            calendar.date(byAdding: .day, value: -7 * $0, to: normalizedWeekEnding)
+        }
+        func average(for weeks: [Date]) -> Double {
+            let total = performanceEntries.filter { entry in
+                weeks.contains { calendar.isDate(entry.weekEnding, inSameDayAs: $0) }
+            }.reduce(0) { $0 + $1.points }
+            return Double(total) / Double(max(1, weeks.count))
+        }
+        let recentAverage = average(for: recentWeekEndings)
+        let previousAverage = average(for: previousWeekEndings)
+        let lastWeekEnding = PointsEngine.previousWeekEnding(before: normalizedWeekEnding, calendar: calendar)
+        let lastWeekEntries = performanceEntries.filter {
+            calendar.isDate($0.weekEnding, inSameDayAs: lastWeekEnding)
+        }
+
+        return MemberActivityInsights(
+            activeWeeks: activeWeeks,
+            averageWeeklyNet: averageWeeklyNet,
+            recentFourWeekAverage: recentAverage,
+            trendFromPreviousFourWeeks: recentAverage - previousAverage,
+            topAwardLastWeek: groupedSummaries(
+                lastWeekEntries.filter { $0.points > 0 },
+                points: { $0.reduce(0) { $0 + $1.points } }
+            ).max { $0.points < $1.points },
+            topPenaltyLastWeek: groupedSummaries(
+                lastWeekEntries.filter { $0.points < 0 },
+                points: { abs($0.reduce(0) { $0 + $1.points }) }
+            ).max { $0.points < $1.points },
+            frequentAwards: Array(groupedSummaries(
+                performanceEntries.filter { $0.points > 0 },
+                points: { $0.reduce(0) { $0 + $1.points } }
+            ).sorted(by: summaryFrequencyOrder).prefix(3)),
+            frequentPurchases: Array(groupedSummaries(
+                approved.filter { $0.kind == .purchase },
+                count: { entries in
+                    max(entries.count, Int(entries.reduce(0.0) { $0 + max(0, $1.quantity) }.rounded()))
+                },
+                points: { abs($0.reduce(0) { $0 + $1.points }) }
+            ).sorted(by: summaryFrequencyOrder).prefix(3))
+        )
+    }
+
     static func weeklyActivity(
         members: [FamilyMember],
         entries: [LedgerEntry],
@@ -272,7 +349,7 @@ enum StatisticsEngine {
         )
     }
 
-    private static func earnedPoints(in entries: [LedgerEntry]) -> Int {
+    private nonisolated static func earnedPoints(in entries: [LedgerEntry]) -> Int {
         entries.reduce(0) { total, entry in
             entry.kind == .purchase ? total : total + max(0, entry.points)
         }
@@ -292,6 +369,30 @@ enum StatisticsEngine {
 
     private static func performancePoints(_ entry: LedgerEntry) -> Int {
         entry.kind == .purchase ? 0 : entry.points
+    }
+
+    private static func groupedSummaries(
+        _ entries: [LedgerEntry],
+        count: ([LedgerEntry]) -> Int = { $0.count },
+        points: ([LedgerEntry]) -> Int
+    ) -> [MemberActivityItemSummary] {
+        Dictionary(grouping: entries) { $0.title.lowercased() }.values.compactMap { matching in
+            guard let title = matching.first?.title else { return nil }
+            return MemberActivityItemSummary(
+                title: title,
+                count: count(matching),
+                points: points(matching)
+            )
+        }
+    }
+
+    private nonisolated static func summaryFrequencyOrder(
+        _ lhs: MemberActivityItemSummary,
+        _ rhs: MemberActivityItemSummary
+    ) -> Bool {
+        if lhs.count != rhs.count { return lhs.count > rhs.count }
+        if lhs.points != rhs.points { return lhs.points > rhs.points }
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
     }
 
     private static func pointScaleByYear(

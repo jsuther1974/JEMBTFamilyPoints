@@ -136,27 +136,65 @@ final class StatisticsEngineTests: XCTestCase {
         XCTAssertEqual(projection?.previousYearNet, 500)
     }
 
+    func testMemberInsightsSummarizeFrequenciesLastWeekAndTrends() {
+        let child = child("Child", born: date(2018, 1, 1))
+        let endingAt = date(2026, 11, 14)
+        let currentWeek = PointsEngine.weekEnding(containing: endingAt, calendar: calendar)
+        let lastWeek = PointsEngine.previousWeekEnding(before: currentWeek, calendar: calendar)
+        let priorPeriodWeek = calendar.date(byAdding: .day, value: -35, to: currentWeek)!
+        let entries = [
+            entry(for: child, title: "Focus", points: 400, kind: .reward, status: .approved, occurredAt: currentWeek, weekEnding: currentWeek),
+            entry(for: child, title: "Reading", points: 100, kind: .reward, status: .approved, occurredAt: lastWeek, weekEnding: lastWeek),
+            entry(for: child, title: "reading", points: 100, kind: .reward, status: .approved, occurredAt: lastWeek, weekEnding: lastWeek),
+            entry(for: child, title: "Chores", points: 150, kind: .reward, status: .approved, occurredAt: lastWeek, weekEnding: lastWeek),
+            entry(for: child, title: "Late", points: -80, kind: .penalty, status: .approved, occurredAt: lastWeek, weekEnding: lastWeek),
+            entry(for: child, title: "Mess", points: -100, kind: .penalty, status: .approved, occurredAt: lastWeek, weekEnding: lastWeek),
+            entry(for: child, title: "Movie", points: -300, kind: .purchase, status: .approved, occurredAt: lastWeek, weekEnding: lastWeek, quantity: 2),
+            entry(for: child, title: "Practice", points: 80, kind: .reward, status: .approved, occurredAt: priorPeriodWeek, weekEnding: priorPeriodWeek),
+            entry(for: child, title: "Pending", points: 9_999, kind: .reward, status: .pending, occurredAt: currentWeek, weekEnding: currentWeek)
+        ]
+
+        let insights = StatisticsEngine.memberInsights(
+            memberID: child.id,
+            entries: entries,
+            endingAt: endingAt,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(insights.activeWeeks, 3)
+        XCTAssertEqual(insights.averageWeeklyNet, 650.0 / 3.0, accuracy: 0.001)
+        XCTAssertEqual(insights.recentFourWeekAverage, 142.5, accuracy: 0.001)
+        XCTAssertEqual(insights.trendFromPreviousFourWeeks, 122.5, accuracy: 0.001)
+        XCTAssertEqual(insights.topAwardLastWeek, MemberActivityItemSummary(title: "Reading", count: 2, points: 200))
+        XCTAssertEqual(insights.topPenaltyLastWeek, MemberActivityItemSummary(title: "Mess", count: 1, points: 100))
+        XCTAssertEqual(insights.frequentAwards.first, MemberActivityItemSummary(title: "Reading", count: 2, points: 200))
+        XCTAssertEqual(insights.frequentPurchases, [MemberActivityItemSummary(title: "Movie", count: 2, points: 300)])
+    }
+
     private func child(_ name: String, born: Date) -> FamilyMember {
         FamilyMember(name: name, birthDate: born, role: .child)
     }
 
     private func entry(
         for member: FamilyMember,
+        title: String = "Activity",
         points: Int,
         kind: EntryKind,
         status: ApprovalStatus,
         occurredAt: Date,
-        weekEnding: Date
+        weekEnding: Date,
+        quantity: Double = 1
     ) -> LedgerEntry {
         LedgerEntry(
             memberID: member.id,
             occurredAt: occurredAt,
             weekEnding: weekEnding,
-            title: "Activity",
+            title: title,
             points: points,
             kind: kind,
             status: status,
-            submittedBy: "Parent"
+            submittedBy: "Parent",
+            quantity: quantity
         )
     }
 

@@ -125,6 +125,40 @@ final class PointsEngineTests: XCTestCase {
         )
     }
 
+    func testDaysUntilNextBirthdayHandlesTodayMissingDatesAndLeapDay() {
+        XCTAssertEqual(
+            PointsEngine.daysUntilNextBirthday(
+                from: date(2018, 12, 30),
+                after: date(2026, 12, 29),
+                calendar: calendar
+            ),
+            1
+        )
+        XCTAssertEqual(
+            PointsEngine.daysUntilNextBirthday(
+                from: date(2018, 12, 30),
+                after: date(2026, 12, 30),
+                calendar: calendar
+            ),
+            0
+        )
+        XCTAssertNil(
+            PointsEngine.daysUntilNextBirthday(
+                from: nil,
+                after: date(2026, 12, 30),
+                calendar: calendar
+            )
+        )
+        XCTAssertEqual(
+            PointsEngine.daysUntilNextBirthday(
+                from: date(2016, 2, 29),
+                after: date(2027, 2, 27),
+                calendar: calendar
+            ),
+            1
+        )
+    }
+
     func testWeeklyMinimumMissIsProposedOnlyWhenRuleOptsIn() {
         let familyID = UUID()
         let child = FamilyMember(
