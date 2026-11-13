@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		37550E05304FFE90008D9993 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 37550E04304FFE90008D9993 /* README.md */; };
+		37581B5830A6C651006B945E /* SoundscapeDirector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37581B5730A6C651006B945E /* SoundscapeDirector.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -32,6 +33,7 @@
 		37550DDC304FFCDD008D9993 /* JEMBT Family Points TrackerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "JEMBT Family Points TrackerTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		37550DE6304FFCDD008D9993 /* JEMBT Family Points TrackerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "JEMBT Family Points TrackerUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		37550E04304FFE90008D9993 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		37581B5730A6C651006B945E /* SoundscapeDirector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundscapeDirector.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -91,6 +93,7 @@
 				37550DDF304FFCDD008D9993 /* JEMBT Family Points TrackerTests */,
 				37550DE9304FFCDD008D9993 /* JEMBT Family Points TrackerUITests */,
 				37550E04304FFE90008D9993 /* README.md */,
+				37581B5730A6C651006B945E /* SoundscapeDirector.swift */,
 				37550DCC304FFCDD008D9993 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -235,6 +238,7 @@
 		37550DC7304FFCDD008D9993 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				37581B5830A6C651006B945E /* SoundscapeDirector.swift in Sources */,
 			);
 		};
 		37550DD8304FFCDD008D9993 /* Sources */ = {

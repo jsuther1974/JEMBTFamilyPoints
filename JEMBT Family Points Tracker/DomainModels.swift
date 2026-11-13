@@ -132,6 +132,14 @@ enum RuleMinimumPeriod: String, Codable, CaseIterable, Identifiable {
     var title: String { self == .weekly ? "Weekly" : "Monthly" }
 }
 
+enum RuleMaximumPeriod: String, Codable, CaseIterable, Identifiable {
+    case daily
+    case weekly
+
+    var id: Self { self }
+    var title: String { self == .daily ? "Per Day" : "Per Week" }
+}
+
 enum StoreInventoryPeriod: String, Codable, CaseIterable, Identifiable {
     case daily
     case weekly
@@ -172,6 +180,7 @@ enum RuleMeasurementUnit: String, Codable, CaseIterable, Identifiable {
     case thirtyMinutes
     case hour
     case item
+    case basket
     case task
 
     var id: Self { self }
@@ -185,6 +194,7 @@ enum RuleMeasurementUnit: String, Codable, CaseIterable, Identifiable {
         case .thirtyMinutes: "30 minutes"
         case .hour: "Hour"
         case .item: "Item"
+        case .basket: "Basket"
         case .task: "Completed task"
         }
     }
@@ -199,6 +209,7 @@ enum RuleMeasurementUnit: String, Codable, CaseIterable, Identifiable {
         case .thirtyMinutes: "30-minute interval\(plural)"
         case .hour: "hour\(plural)"
         case .item: "item\(plural)"
+        case .basket: "basket\(plural)"
         case .task: "task\(plural)"
         }
     }
@@ -259,6 +270,7 @@ final class RuleTemplate {
     var measurementUnitRawValue: String = RuleMeasurementUnit.occurrence.rawValue
     var minimumTarget: Double?
     var maximumTarget: Double?
+    var maximumPeriodRawValue: String = RuleMaximumPeriod.weekly.rawValue
     var warningUnits: Int = 0
     var acceleratorEnabled: Bool = false
     var acceleratorStartsAt: Int = 2
@@ -325,6 +337,11 @@ final class RuleTemplate {
     var minimumPeriod: RuleMinimumPeriod {
         get { RuleMinimumPeriod(rawValue: minimumPeriodRawValue) ?? .weekly }
         set { minimumPeriodRawValue = newValue.rawValue }
+    }
+
+    var maximumPeriod: RuleMaximumPeriod {
+        get { RuleMaximumPeriod(rawValue: maximumPeriodRawValue) ?? .weekly }
+        set { maximumPeriodRawValue = newValue.rawValue }
     }
 
     var storeInventoryPeriod: StoreInventoryPeriod {
@@ -405,6 +422,7 @@ final class RuleTemplate {
         measurementUnit: RuleMeasurementUnit = .occurrence,
         minimumTarget: Double? = nil,
         maximumTarget: Double? = nil,
+        maximumPeriod: RuleMaximumPeriod = .weekly,
         warningUnits: Int = 0,
         acceleratorEnabled: Bool = false,
         acceleratorStartsAt: Int = 2,
@@ -437,6 +455,7 @@ final class RuleTemplate {
         self.measurementUnitRawValue = measurementUnit.rawValue
         self.minimumTarget = minimumTarget
         self.maximumTarget = maximumTarget
+        self.maximumPeriodRawValue = maximumPeriod.rawValue
         self.warningUnits = warningUnits
         self.acceleratorEnabled = acceleratorEnabled
         self.acceleratorStartsAt = acceleratorStartsAt
@@ -489,6 +508,27 @@ final class RuleTemplate {
         let additionalQuantity = max(0, additionalQuantity ?? singleAwardQuantity)
         return calculatedPoints(quantity: existingQuantity + additionalQuantity) -
             calculatedPoints(quantity: existingQuantity)
+    }
+
+    func incrementalPointAllocations(
+        existingQuantities: [Double],
+        additionalQuantity: Double
+    ) -> [Int] {
+        let additionalQuantity = max(0, additionalQuantity)
+        var newlyAssignedWeeklyQuantity = 0.0
+
+        return existingQuantities.map { existingQuantity in
+            let accumulatedQuantity = max(0, existingQuantity) +
+                (maximumPeriod == .weekly ? newlyAssignedWeeklyQuantity : 0)
+            let points = incrementalPoints(
+                existingQuantity: accumulatedQuantity,
+                additionalQuantity: additionalQuantity
+            )
+            if maximumPeriod == .weekly {
+                newlyAssignedWeeklyQuantity += additionalQuantity
+            }
+            return points
+        }
     }
 }
 
@@ -594,6 +634,7 @@ final class WeeklySettlement {
     var debtCarriedOut: Int = 0
     var confirmedAt: Date = Date()
     var confirmedBy: String = ""
+    var transactionFingerprint: String?
 
     init(
         id: UUID = UUID(),
@@ -611,6 +652,7 @@ final class WeeklySettlement {
         finalPoints: Int,
         cashAmount: Decimal,
         debtCarriedOut: Int,
+        transactionFingerprint: String? = nil,
         confirmedAt: Date = .now,
         confirmedBy: String
     ) {
@@ -629,6 +671,7 @@ final class WeeklySettlement {
         self.finalPoints = finalPoints
         self.cashAmount = cashAmount
         self.debtCarriedOut = debtCarriedOut
+        self.transactionFingerprint = transactionFingerprint
         self.confirmedAt = confirmedAt
         self.confirmedBy = confirmedBy
     }
@@ -706,7 +749,7 @@ final class AppleIDMapping {
     var familyMemberID: UUID = UUID()
     var createdAt: Date = Date()
     var lastSignInAt: Date?
-    
+
     init(
         id: UUID = UUID(),
         familyID: UUID = UUID(),

@@ -173,8 +173,10 @@ struct RuleCatalogListView: View {
         target.countSchedule = draft.countSchedule
         target.frequencyValue = Double(draft.frequencyCount)
         target.timeUnit = draft.timeUnit
+        target.measurementUnit = draft.effectiveMeasurementUnit
         target.minimumTarget = Double(draft.firstAward)
         target.maximumTarget = draft.hasLastAward ? Double(draft.lastAward) : nil
+        target.maximumPeriod = draft.maximumPeriod
         target.growthEnabled = draft.growthEnabled
         target.growthKind = draft.growthKind
         target.growthAmount = draft.growthAmount
@@ -298,7 +300,7 @@ private struct RuleDetailView: View {
                     Text(rule.frequencyDescription)
                     Text("Point awards start on the \(ordinal(rule.firstAwardNumber)) award.")
                     if let lastAward = rule.lastAwardNumber {
-                        Text("Point awards end after award \(lastAward).")
+                        Text("Point awards end after award \(lastAward) \(rule.maximumPeriod == .daily ? "each day" : "each week").")
                     }
                     if rule.deductStartingPointsWhenMinimumMissed {
                         Text("If the \(rule.minimumPeriod.title.lowercased()) minimum is missed, a parent can deduct \(abs(rule.defaultPoints).formatted()) points from the starting value.")
@@ -327,6 +329,7 @@ struct RuleEditorView: View {
     let catalog: RuleCatalog
     let onSave: (RuleDraft) throws -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(SoundscapeDirector.self) private var soundscape
     @State private var draft: RuleDraft
     @State private var validationMessage: String?
     @State private var showingIconPicker = false
@@ -435,7 +438,12 @@ struct RuleEditorView: View {
                                     .keyboardType(.numberPad)
                                     .multilineTextAlignment(.trailing)
                                     .frame(width: 55)
-                                Text(draft.frequencyCount == 1 ? "time" : "times")
+                                Text(draft.countMeasurementUnit.label(for: Double(draft.frequencyCount)))
+                            }
+                            Picker("Count in", selection: $draft.countMeasurementUnit) {
+                                ForEach(RuleDraft.countMeasurementUnits) { unit in
+                                    Text(unit.title).tag(unit)
+                                }
                             }
                         }
                     } else {
@@ -479,11 +487,17 @@ struct RuleEditorView: View {
                                     .labelsHidden()
                             }
                         }
+                        Picker("Cap resets", selection: $draft.maximumPeriod) {
+                            ForEach(RuleMaximumPeriod.allCases) { period in
+                                Text(period.title).tag(period)
+                            }
+                        }
+                        .pickerStyle(.segmented)
                     }
                 } header: {
                     Text("When do point awards start and stop?")
                 } footer: {
-                    Text("Choose a later starting award when the first few times do not count. Add an ending award to cap the total for the week.")
+                    Text("Choose a later starting award when the first few times do not count. An ending award can reset each day or each week.")
                 }
 
                 if catalog == .incentives {
@@ -548,6 +562,14 @@ struct RuleEditorView: View {
             }
             .sheet(isPresented: $showingIconPicker) {
                 RuleIconPicker(selectedIcon: $draft.iconName)
+            }
+            .onAppear {
+                guard catalog != .tradingPost else { return }
+                soundscape.activate(catalog == .incentives ? .rewardEntry : .penaltyEntry)
+            }
+            .onDisappear {
+                guard catalog != .tradingPost else { return }
+                soundscape.deactivate(catalog == .incentives ? .rewardEntry : .penaltyEntry)
             }
         }
     }
@@ -643,11 +665,13 @@ struct RuleDraft {
     var pointsMagnitude: Int
     var frequencyKind: RuleFrequencyKind
     var countSchedule: RuleCountSchedule
+    var countMeasurementUnit: RuleMeasurementUnit
     var frequencyCount: Int
     var timeUnit: RuleTimeUnit
     var firstAward: Int
     var hasLastAward: Bool
     var lastAward: Int
+    var maximumPeriod: RuleMaximumPeriod
     var growthEnabled: Bool
     var growthKind: RuleGrowthKind
     var growthAmount: Double
@@ -671,11 +695,15 @@ struct RuleDraft {
         pointsMagnitude = abs(rule?.defaultPoints ?? 0)
         frequencyKind = rule?.frequencyKind ?? .count
         countSchedule = rule?.countSchedule ?? .every
+        countMeasurementUnit = Self.countMeasurementUnits.contains(rule?.measurementUnit ?? .occurrence)
+            ? (rule?.measurementUnit ?? .occurrence)
+            : .occurrence
         frequencyCount = max(1, Int(rule?.frequencyValue ?? 1))
         timeUnit = rule?.timeUnit ?? .day
         firstAward = max(1, Int(rule?.minimumTarget ?? 1), (rule?.warningUnits ?? 0) + 1)
         hasLastAward = rule?.maximumTarget != nil
         lastAward = max(firstAward, Int(rule?.maximumTarget ?? Double(firstAward)))
+        maximumPeriod = rule?.maximumPeriod ?? .weekly
         growthEnabled = rule?.growthEnabled == true || rule?.acceleratorEnabled == true
         growthKind = rule?.growthEnabled == true ? (rule?.growthKind ?? .percentage) : .percentage
         growthAmount = rule?.growthEnabled == true
@@ -690,6 +718,17 @@ struct RuleDraft {
         hasAgeRange = rule?.minimumEligibleAge != nil || rule?.maximumEligibleAge != nil
         minimumAge = max(0, rule?.minimumEligibleAge ?? 0)
         maximumAge = max(minimumAge, rule?.maximumEligibleAge ?? 17)
+    }
+
+    static let countMeasurementUnits: [RuleMeasurementUnit] = [.occurrence, .item, .basket, .task]
+
+    var effectiveMeasurementUnit: RuleMeasurementUnit {
+        guard frequencyKind == .time else { return countMeasurementUnit }
+        return switch timeUnit {
+        case .minute: .minute
+        case .hour: .hour
+        case .day, .week, .month: .day
+        }
     }
 
     func signedPoints(for catalog: RuleCatalog) -> Int {

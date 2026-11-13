@@ -434,7 +434,12 @@ enum PointsEngine {
             let approvedCurrentEntries = currentEntries.filter { $0.status == .approved }
             let pendingCurrentEntries = currentEntries.filter { $0.status == .pending }
             let rejectedCurrentEntries = currentEntries.filter { $0.status == .rejected }
-            let currentQuantity = activeWeeklyEntries.reduce(0.0) { $0 + max(0, $1.quantity) }
+            let quantityEntries = rule?.maximumPeriod == .daily
+                ? activeWeeklyEntries.filter {
+                    calendar.isDate(occurrenceDate(for: $0, calendar: calendar), inSameDayAs: key.occurredAt)
+                }
+                : activeWeeklyEntries
+            let currentQuantity = quantityEntries.reduce(0.0) { $0 + max(0, $1.quantity) }
             let recordPoints = key.kind == .penalty
                 ? (weeklyTotals.min() ?? 0)
                 : (weeklyTotals.max() ?? 0)
@@ -669,6 +674,136 @@ enum PointsEngine {
 
 
 
+    static func transactionFingerprint(
+        weekEnding: Date,
+        memberIDs: Set<UUID>,
+        entries: [LedgerEntry],
+        calendar: Calendar = .current
+    ) -> String {
+        let payload = entries
+            .filter {
+                memberIDs.contains($0.memberID) &&
+                $0.status != .rejected &&
+                calendar.isDate($0.weekEnding, inSameDayAs: weekEnding)
+            }
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .map {
+                [
+                    $0.id.uuidString,
+                    $0.memberID.uuidString,
+                    $0.ruleID?.uuidString ?? "",
+                    $0.kindRawValue,
+                    $0.statusRawValue,
+                    String($0.points),
+                    String($0.quantity),
+                    String($0.occurredAt.timeIntervalSinceReferenceDate)
+                ].joined(separator: "|")
+            }
+            .joined(separator: ";")
+
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in payload.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
+    }
+
+    static func activePastWeekEndings(
+        currentWeekEnding: Date = weekEnding(containing: .now),
+        members: [FamilyMember],
+        entries: [LedgerEntry],
+        settlements: [WeeklySettlement],
+        rules: [RuleTemplate] = [],
+        cashValuePerPoint: Decimal = Decimal(string: "0.01")!,
+        calendar: Calendar = .current
+    ) -> [Date] {
+        let memberIDs = Set(members.map(\.id))
+        let currentWeek = calendar.startOfDay(for: currentWeekEnding)
+        let candidateWeeks = Set(entries.compactMap { entry -> Date? in
+            guard memberIDs.contains(entry.memberID), entry.status != .rejected else { return nil }
+            let week = calendar.startOfDay(for: entry.weekEnding)
+            return week < currentWeek ? week : nil
+        })
+
+        return candidateWeeks
+            .filter {
+                !isWeekClosed(
+                    $0,
+                    members: members,
+                    entries: entries,
+                    settlements: settlements,
+                    rules: rules,
+                    cashValuePerPoint: cashValuePerPoint,
+                    calendar: calendar
+                )
+            }
+            .sorted()
+    }
+
+    static func isWeekClosed(
+        _ weekEnding: Date,
+        members: [FamilyMember],
+        entries: [LedgerEntry],
+        settlements: [WeeklySettlement],
+        rules: [RuleTemplate] = [],
+        cashValuePerPoint: Decimal = Decimal(string: "0.01")!,
+        calendar: Calendar = .current
+    ) -> Bool {
+        let children = members.filter { $0.isActive && $0.role == .child }
+        guard !children.isEmpty else { return false }
+        let memberIDs = Set(members.map(\.id))
+        let childIDs = Set(children.map(\.id))
+        let weekSettlements = settlements.filter { settlement in
+            childIDs.contains(settlement.childID) &&
+            calendar.isDate(settlement.weekEnding, inSameDayAs: weekEnding)
+        }
+        guard Set(weekSettlements.map(\.childID)) == childIDs else { return false }
+
+        let fingerprint = transactionFingerprint(
+            weekEnding: weekEnding,
+            memberIDs: memberIDs,
+            entries: entries,
+            calendar: calendar
+        )
+        if weekSettlements.allSatisfy({ $0.transactionFingerprint != nil }) {
+            return weekSettlements.allSatisfy { $0.transactionFingerprint == fingerprint }
+        }
+
+        guard pendingEntriesForReview(
+            weekEnding: weekEnding,
+            memberIDs: memberIDs,
+            entries: entries,
+            calendar: calendar
+        ).isEmpty else { return false }
+        let earliestConfirmation = weekSettlements.map(\.confirmedAt).min() ?? .distantPast
+        let hasTransactionApprovedAfterClose = entries.contains {
+            memberIDs.contains($0.memberID) &&
+            $0.status == .approved &&
+            calendar.isDate($0.weekEnding, inSameDayAs: weekEnding) &&
+            ($0.reviewedAt ?? .distantPast) > earliestConfirmation
+        }
+        guard !hasTransactionApprovedAfterClose else { return false }
+        let drafts = settlementDrafts(
+            weekEnding: weekEnding,
+            members: members,
+            entries: entries,
+            settlements: settlements,
+            rules: rules,
+            cashValuePerPoint: cashValuePerPoint,
+            calendar: calendar
+        )
+        return drafts.allSatisfy { draft in
+            weekSettlements.contains { settlement in
+                settlement.childID == draft.child.id &&
+                settlement.startingPoints == draft.startingPoints &&
+                settlement.debtCarriedIn == draft.debtCarriedIn &&
+                settlement.approvedEntryPoints == draft.approvedEntryPoints &&
+                settlement.parentPotShare == draft.parentPotShare
+            }
+        }
+    }
+
     static func settlementDrafts(
         weekEnding: Date,
         members: [FamilyMember],
@@ -736,4 +871,3 @@ enum PointsEngine {
             }
     }
 }
-

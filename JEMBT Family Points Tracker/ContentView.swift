@@ -1,10 +1,31 @@
 import SwiftData
 import SwiftUI
+#if canImport(AudioToolbox)
+import AudioToolbox
+#endif
+
+private struct PointChangeNotice: Identifiable {
+    let id = UUID()
+    let points: Int
+
+    var title: String { points > 0 ? "Points gained!" : "Points changed" }
+    var message: String {
+        points > 0
+            ? "+\(points.formatted()) points were added to your account."
+            : "\(abs(points).formatted()) points were deducted from your account."
+    }
+    var symbolName: String { points > 0 ? "sparkles" : "arrow.down.circle.fill" }
+    var color: Color { points > 0 ? .green : .orange }
+}
 
 struct ContentView: View {
     @Environment(AppleIDManager.self) private var appleIDManager
+    @Environment(SoundscapeDirector.self) private var soundscape
+    @Query private var entries: [LedgerEntry]
     @State private var selectedTab = "family"
     @State private var reportingPeriod = ReportingPeriod()
+    @State private var observedPointTotal: Int?
+    @State private var pointChangeNotice: PointChangeNotice?
     
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -45,7 +66,16 @@ struct ContentView: View {
                     Divider()
                     
                     NavigationLink("Manage My Family", destination: ManageFamilyView())
-                    
+
+                    Button {
+                        soundscape.isEnabled.toggle()
+                    } label: {
+                        Label(
+                            soundscape.isEnabled ? "Turn Sounds Off" : "Turn Sounds On",
+                            systemImage: soundscape.isEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill"
+                        )
+                    }
+
                     Divider()
                     
                     Button("Sign Out", action: signOut)
@@ -54,9 +84,63 @@ struct ContentView: View {
                 }
             }
         }
+        .overlay(alignment: .top) {
+            if let pointChangeNotice {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(pointChangeNotice.title).font(.headline)
+                        Text(pointChangeNotice.message).font(.caption)
+                    }
+                } icon: {
+                    Image(systemName: pointChangeNotice.symbolName)
+                        .font(.title2)
+                }
+                .foregroundStyle(pointChangeNotice.color)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(.regularMaterial, in: Capsule())
+                .shadow(radius: 8, y: 4)
+                .padding(.top, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .accessibilityIdentifier("pointChangeNotice")
+            }
+        }
+        .onAppear {
+            observedPointTotal = currentUserPointTotal
+        }
+        .onChange(of: currentUserPointTotal) { _, newTotal in
+            showPointChange(from: observedPointTotal, to: newTotal)
+        }
+    }
+
+    private var currentUserPointTotal: Int {
+        guard let memberID = appleIDManager.currentFamilyMember?.id else { return 0 }
+        return entries
+            .filter {
+                $0.memberID == memberID &&
+                $0.status == .approved &&
+                $0.kind != .purchase
+            }
+            .reduce(0) { $0 + $1.points }
+    }
+
+    private func showPointChange(from oldTotal: Int?, to newTotal: Int) {
+        defer { observedPointTotal = newTotal }
+        guard let oldTotal, oldTotal != newTotal else { return }
+        let notice = PointChangeNotice(points: newTotal - oldTotal)
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            pointChangeNotice = notice
+        }
+        soundscape.play(notice.points > 0 ? .pointsGained : .pointsLost)
+        Task {
+            try? await Task.sleep(for: .seconds(3.2))
+            guard pointChangeNotice?.id == notice.id else { return }
+            withAnimation { pointChangeNotice = nil }
+        }
     }
     
     private func signOut() {
+        soundscape.stop()
         appleIDManager.signOut()
     }
 }
@@ -251,7 +335,7 @@ private struct LogActivityView: View {
 
 struct SettlementView: View {
     @Environment(AppleIDManager.self) private var appleIDManager
-    @Environment(ReportingPeriod.self) private var reportingPeriod
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Query private var members: [FamilyMember]
     @Query private var entries: [LedgerEntry]
@@ -262,18 +346,52 @@ struct SettlementView: View {
     @State private var expandedChildren: Set<UUID> = []
     @State private var showingPendingWarning = false
     @State private var quickActivity: QuickActivityRequest?
+    @State private var selectedWeekEnding: Date?
+    @State private var completionMessage: String?
+    @State private var showingFinalCelebration = false
 
-    private var selectedWeekEnding: Date { reportingPeriod.weekEnding }
+    private var familyMembers: [FamilyMember] {
+        members.filter { $0.familyID == appleIDManager.currentFamily?.id }
+    }
+
+    private var familyEntries: [LedgerEntry] {
+        let memberIDs = Set(familyMembers.map(\.id))
+        return entries.filter { memberIDs.contains($0.memberID) }
+    }
+
+    private var familySettlements: [WeeklySettlement] {
+        let memberIDs = Set(familyMembers.map(\.id))
+        return settlements.filter { memberIDs.contains($0.childID) }
+    }
+
+    private var familyRules: [RuleTemplate] {
+        rules.filter { $0.familyID == appleIDManager.currentFamily?.id }
+    }
+
+    private var activeWeekEndings: [Date] {
+        PointsEngine.activePastWeekEndings(
+            members: familyMembers,
+            entries: familyEntries,
+            settlements: familySettlements,
+            rules: familyRules,
+            cashValuePerPoint: appleIDManager.currentFamily?.effectiveCashValuePerPoint ?? Decimal(string: "0.01")!
+        )
+    }
+
+    private var effectiveWeekEnding: Date {
+        selectedWeekEnding ?? activeWeekEndings.first ?? PointsEngine.previousWeekEnding(before: PointsEngine.weekEnding(containing: .now))
+    }
 
     private var canConfirm: Bool {
         appleIDManager.currentMembership?.role.canManageRules == true
     }
 
     private var drafts: [SettlementDraft] {
+        guard !activeWeekEndings.isEmpty else { return [] }
         let familyMembers = members.filter { $0.familyID == appleIDManager.currentFamily?.id }
         let ids = Set(familyMembers.map(\.id))
         return PointsEngine.settlementDrafts(
-            weekEnding: selectedWeekEnding,
+            weekEnding: effectiveWeekEnding,
             members: familyMembers,
             entries: entries.filter { ids.contains($0.memberID) },
             settlements: settlements.filter { ids.contains($0.childID) },
@@ -285,7 +403,7 @@ struct SettlementView: View {
     private var pendingEntriesForWeek: [LedgerEntry] {
         let ids = Set(members.filter { $0.familyID == appleIDManager.currentFamily?.id }.map(\.id))
         return PointsEngine.pendingEntriesForReview(
-            weekEnding: selectedWeekEnding,
+            weekEnding: effectiveWeekEnding,
             memberIDs: ids,
             entries: entries
         )
@@ -306,7 +424,30 @@ struct SettlementView: View {
     var body: some View {
         NavigationStack {
             List {
-                ReportingWeekPicker()
+                if activeWeekEndings.isEmpty {
+                    ContentUnavailableView(
+                        "All Prior Weeks Are Closed",
+                        systemImage: "checkmark.seal.fill",
+                        description: Text("There are no past weeks with active transactions to review.")
+                    )
+                } else {
+                    Picker("Week ending", selection: Binding(
+                        get: { effectiveWeekEnding },
+                        set: { selectedWeekEnding = $0 }
+                    )) {
+                        ForEach(activeWeekEndings, id: \.self) { weekEnding in
+                            Text(weekEnding.formatted(date: .abbreviated, time: .omitted))
+                                .tag(weekEnding)
+                        }
+                    }
+                    .accessibilityIdentifier("settlementWeekPicker")
+                }
+
+                if let completionMessage {
+                    Label(completionMessage, systemImage: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                        .accessibilityIdentifier("settlementCompletionMessage")
+                }
 
                 if let errorMessage {
                     Text(errorMessage)
@@ -331,7 +472,7 @@ struct SettlementView: View {
                         HStack(spacing: 12) {
                             activityMenu(kind: .reward)
                             activityMenu(kind: .penalty)
-                            Button("Confirm settlement", action: requestGlobalConfirmation)
+                            Button("Close This Week", action: requestGlobalConfirmation)
                                 .buttonStyle(.borderedProminent)
                                 .disabled(unconfirmedDrafts.isEmpty || !allDecisionsComplete)
                                 .accessibilityIdentifier("confirmGlobalSettlement")
@@ -343,17 +484,29 @@ struct SettlementView: View {
                     }
                 }
             }
-            .navigationTitle("Weekly Settlement")
+            .navigationTitle("Review and Close")
+            .overlay {
+                if showingFinalCelebration {
+                    ClosingCelebrationView()
+                        .transition(.opacity)
+                        .accessibilityIdentifier("closingCelebration")
+                }
+            }
             .alert(
-                "Reject waiting items and close the books?",
+                "Reject waiting items and close this week?",
                 isPresented: $showingPendingWarning
             ) {
                 Button("Not Yet", role: .cancel) {}
-                Button("Reject Waiting & Settle", role: .destructive) {
+                Button("Reject Waiting & Close", role: .destructive) {
                     confirmAll(rejectingPending: true)
                 }
             } message: {
                 Text("\(pendingEntriesForWeek.count) item\(pendingEntriesForWeek.count == 1 ? " is" : "s are") still waiting for parent review. Continuing will reject all waiting items in this week before settlement.")
+            }
+            .onAppear {
+                if selectedWeekEnding == nil {
+                    selectedWeekEnding = activeWeekEndings.first
+                }
             }
             .onChange(of: selectedWeekEnding) {
                 minimumMissDecisions.removeAll()
@@ -396,8 +549,14 @@ struct SettlementView: View {
     }
 
     private func confirmedSettlement(for draft: SettlementDraft) -> WeeklySettlement? {
-        settlements.first {
+        let fingerprint = PointsEngine.transactionFingerprint(
+            weekEnding: draft.weekEnding,
+            memberIDs: Set(familyMembers.map(\.id)),
+            entries: familyEntries
+        )
+        return settlements.first {
             $0.childID == draft.child.id &&
+            $0.transactionFingerprint == fingerprint &&
             Calendar.current.isDate($0.weekEnding, inSameDayAs: draft.weekEnding)
         }
     }
@@ -413,16 +572,30 @@ struct SettlementView: View {
 
     private func confirmAll(rejectingPending: Bool = false) {
         guard canConfirm, allDecisionsComplete, !unconfirmedDrafts.isEmpty else { return }
+        let closedWeek = effectiveWeekEnding
         let reviewer = appleIDManager.currentFamilyMember?.name ?? "Parent"
+        let memberIDs = Set(familyMembers.map(\.id))
         if rejectingPending {
-            let memberIDs = Set(members.filter { $0.familyID == appleIDManager.currentFamily?.id }.map(\.id))
             PointsEngine.rejectPendingEntriesBeforeSettlement(
-                weekEnding: selectedWeekEnding,
+                weekEnding: closedWeek,
                 memberIDs: memberIDs,
                 entries: entries,
                 reviewedBy: reviewer,
                 reviewedAt: .now
             )
+        }
+
+        let fingerprint = PointsEngine.transactionFingerprint(
+            weekEnding: closedWeek,
+            memberIDs: memberIDs,
+            entries: entries
+        )
+        let distributedPoints = unconfirmedDrafts.reduce(0) { total, draft in
+            let selectedRuleIDs = draft.selectedRuleIDs(from: decisions(for: draft))
+            return total + max(0, draft.finalPoints(applying: selectedRuleIDs))
+        }
+        for settlement in familySettlements where Calendar.current.isDate(settlement.weekEnding, inSameDayAs: closedWeek) {
+            modelContext.delete(settlement)
         }
 
         for draft in unconfirmedDrafts {
@@ -447,6 +620,7 @@ struct SettlementView: View {
                 finalPoints: draft.finalPoints(applying: selectedRuleIDs),
                 cashAmount: draft.cashAmount(applying: selectedRuleIDs),
                 debtCarriedOut: draft.debtCarriedOut(applying: selectedRuleIDs),
+                transactionFingerprint: fingerprint,
                 confirmedBy: reviewer
             ))
         }
@@ -455,9 +629,34 @@ struct SettlementView: View {
             try modelContext.save()
             errorMessage = nil
             showingPendingWarning = false
+            completionMessage = "Congratulations! You closed the week ending \(closedWeek.formatted(date: .numeric, time: .omitted)) and distributed \(distributedPoints.formatted()) points!"
+            minimumMissDecisions.removeAll()
+            expandedChildren.removeAll()
+
+            let remainingWeeks = activeWeekEndings.filter {
+                !Calendar.current.isDate($0, inSameDayAs: closedWeek)
+            }
+            if let nextWeek = remainingWeeks.first {
+                selectedWeekEnding = nextWeek
+            } else {
+                celebrateAndReturn()
+            }
         } catch {
             modelContext.rollback()
-            errorMessage = "The settlement could not be saved: \(error.localizedDescription)"
+            errorMessage = "The week could not be closed: \(error.localizedDescription)"
+        }
+    }
+
+    private func celebrateAndReturn() {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            showingFinalCelebration = true
+        }
+        #if canImport(AudioToolbox)
+        AudioServicesPlaySystemSound(1025)
+        #endif
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            dismiss()
         }
     }
 
@@ -555,16 +754,74 @@ struct SettlementView: View {
         Menu {
             ForEach(children) { child in
                 Button(child.name) {
-                    quickActivity = QuickActivityRequest(member: child, kind: kind, weekEnding: selectedWeekEnding)
+                    quickActivity = QuickActivityRequest(member: child, kind: kind, weekEnding: effectiveWeekEnding)
                 }
             }
         } label: {
             Image(systemName: kind.quickActionSymbolName)
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(kind == .reward ? Color.green : Color.red)
+                .frame(width: 48, height: 44)
+                .background(
+                    (kind == .reward ? Color.green : Color.red).opacity(0.14),
+                    in: Capsule()
+                )
         }
+        .buttonStyle(.plain)
         .accessibilityLabel(kind == .reward ? "Assign award" : "Assign penalty")
     }
 }
 
+private struct ClosingCelebrationView: View {
+    @State private var falling = false
+    private let colors: [Color] = [.red, .orange, .yellow, .green, .blue, .purple, .pink]
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                Color.black.opacity(0.18).ignoresSafeArea()
+                ForEach(0..<36, id: \.self) { index in
+                    let x = CGFloat((index * 47) % 101) / 100 * proxy.size.width
+                    let size = CGFloat(8 + (index % 4) * 4)
+                    Group {
+                        if index.isMultiple(of: 7) {
+                            Image(systemName: "balloon.2.fill")
+                                .font(.system(size: size + 10))
+                        } else {
+                            RoundedRectangle(cornerRadius: 2)
+                                .frame(width: size, height: size * 0.55)
+                                .rotationEffect(.degrees(Double(index * 31)))
+                        }
+                    }
+                    .foregroundStyle(colors[index % colors.count])
+                    .position(x: x, y: falling ? proxy.size.height + 40 : -40)
+                    .animation(
+                        .easeIn(duration: 1.6 + Double(index % 5) * 0.12)
+                            .delay(Double(index % 9) * 0.04),
+                        value: falling
+                    )
+                }
+
+                VStack(spacing: 12) {
+                    Image(systemName: "party.popper.fill")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.orange)
+                    Text("Congratulations!")
+                        .font(.title.bold())
+                    Text("You closed the books for all prior weeks!")
+                        .font(.headline)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(28)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
+                .padding()
+            }
+            .onAppear { falling = true }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Congratulations! You closed the books for all prior weeks!")
+    }
+}
 
 private func ordinal(_ value: Int) -> String {
     let formatter = NumberFormatter()

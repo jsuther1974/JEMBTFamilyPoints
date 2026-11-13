@@ -908,6 +908,52 @@ final class PointsEngineTests: XCTestCase {
         )
     }
 
+    func testCurrentThursdayDefaultsToThursdayInItsReportingWeek() {
+        XCTAssertEqual(
+            PointsEngine.defaultWeekday(
+                inWeekEnding: date(2026, 11, 14),
+                today: date(2026, 11, 12),
+                calendar: calendar
+            ),
+            5
+        )
+    }
+
+    func testDailyAwardCapResetsForEachOccurrenceDay() {
+        let familyID = UUID()
+        let child = FamilyMember(familyID: familyID, name: "Child", role: .child)
+        let rule = RuleTemplate(
+            familyID: familyID,
+            title: "Laundry",
+            category: .household,
+            kind: .reward,
+            defaultPoints: 50,
+            measurementUnit: .basket,
+            maximumTarget: 2,
+            maximumPeriod: .daily
+        )
+        let weekEnding = date(2026, 11, 7)
+        let entries = [
+            LedgerEntry(memberID: child.id, ruleID: rule.id, occurredAt: date(2026, 11, 2), weekEnding: weekEnding, title: rule.title, points: 100, kind: .reward, status: .approved, submittedBy: "Parent", quantity: 2, measurementUnit: .basket),
+            LedgerEntry(memberID: child.id, ruleID: rule.id, occurredAt: date(2026, 11, 4), weekEnding: weekEnding, title: rule.title, points: 50, kind: .reward, status: .approved, submittedBy: "Parent", quantity: 1, measurementUnit: .basket)
+        ]
+
+        let summaries = PointsEngine.ledgerSummaries(
+            weekEnding: weekEnding,
+            memberIDs: [child.id],
+            entries: entries,
+            rules: [rule],
+            calendar: calendar
+        )
+        let monday = summaries.first { calendar.isDate($0.occurredAt, inSameDayAs: date(2026, 11, 2)) }
+        let wednesday = summaries.first { calendar.isDate($0.occurredAt, inSameDayAs: date(2026, 11, 4)) }
+
+        XCTAssertEqual(monday?.nextPoints, 0)
+        XCTAssertEqual(wednesday?.nextPoints, 50)
+        XCTAssertEqual(rule.measurementUnit, .basket)
+        XCTAssertEqual(rule.maximumPeriod, .daily)
+    }
+
     func testLegacyOccurrenceOutsideStoredWeekFallsBackToWeekEnding() {
         let weekEnding = date(2026, 11, 7)
         let entry = LedgerEntry(
@@ -1149,9 +1195,13 @@ final class PointsEngineTests: XCTestCase {
     }
 
     @MainActor
-    func testReportingPeriodNormalizesSelectedDateToSaturday() {
-        let period = ReportingPeriod(weekEnding: date(2026, 11, 3))
-        XCTAssertEqual(period.weekEnding, date(2026, 11, 7))
+    func testReportingPeriodNormalizesEverySelectedDayToItsWeekEndingSaturday() {
+        let period = ReportingPeriod(weekEnding: date(2026, 11, 1))
+
+        for day in 1...7 {
+            period.select(date(2026, 11, day))
+            XCTAssertEqual(period.weekEnding, date(2026, 11, 7))
+        }
 
         period.select(date(2026, 11, 8))
         XCTAssertEqual(period.weekEnding, date(2026, 11, 14))
@@ -1231,6 +1281,8 @@ final class PointsEngineTests: XCTestCase {
 }
 
 final class ActivitySubmissionPolicyTests: XCTestCase {
+    private var calendar: Calendar { gregorianUTC }
+
     private var gregorianUTC: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -1324,6 +1376,129 @@ final class ActivitySubmissionPolicyTests: XCTestCase {
             member: caregiver,
             membershipRole: .caregiver
         ))
+    }
+
+    func testReviewAndCloseWeeksArePastActiveOldestFirstAndExcludeClosedWeeks() {
+        let child = FamilyMember(name: "Child", role: .child)
+        let oldWeek = date(2026, 10, 24)
+        let newerWeek = date(2026, 10, 31)
+        let currentWeek = date(2026, 11, 7)
+        let oldEntry = LedgerEntry(memberID: child.id, weekEnding: oldWeek, title: "Reading", points: 10, kind: .reward, status: .approved, submittedBy: "Parent")
+        let newerEntry = LedgerEntry(memberID: child.id, weekEnding: newerWeek, title: "Chores", points: 20, kind: .reward, status: .approved, submittedBy: "Parent")
+        let currentEntry = LedgerEntry(memberID: child.id, weekEnding: currentWeek, title: "Current", points: 30, kind: .reward, status: .approved, submittedBy: "Parent")
+        let rejected = LedgerEntry(memberID: child.id, weekEnding: date(2026, 10, 17), title: "Rejected", points: 99, kind: .reward, status: .rejected, submittedBy: "Parent")
+        let entries = [currentEntry, rejected, newerEntry, oldEntry]
+
+        XCTAssertEqual(PointsEngine.activePastWeekEndings(
+            currentWeekEnding: currentWeek,
+            members: [child],
+            entries: entries,
+            settlements: [],
+            calendar: calendar
+        ), [oldWeek, newerWeek])
+
+        let fingerprint = PointsEngine.transactionFingerprint(
+            weekEnding: oldWeek,
+            memberIDs: [child.id],
+            entries: entries,
+            calendar: calendar
+        )
+        let closed = WeeklySettlement(
+            childID: child.id,
+            weekEnding: oldWeek,
+            startingPoints: 0,
+            debtCarriedIn: 0,
+            approvedEntryPoints: 10,
+            parentPotShare: 0,
+            finalPoints: 10,
+            cashAmount: Decimal(string: "0.10")!,
+            debtCarriedOut: 0,
+            transactionFingerprint: fingerprint,
+            confirmedBy: "Parent"
+        )
+
+        XCTAssertEqual(PointsEngine.activePastWeekEndings(
+            currentWeekEnding: currentWeek,
+            members: [child],
+            entries: entries,
+            settlements: [closed],
+            calendar: calendar
+        ), [newerWeek])
+    }
+
+    func testAddingTransactionReopensFingerprintedAndLegacyClosedWeeks() {
+        let child = FamilyMember(name: "Child", role: .child)
+        let week = date(2026, 10, 31)
+        let currentWeek = date(2026, 11, 7)
+        let original = LedgerEntry(
+            memberID: child.id,
+            weekEnding: week,
+            title: "Reading",
+            points: 10,
+            kind: .reward,
+            status: .approved,
+            submittedBy: "Parent",
+            reviewedAt: date(2026, 11, 1)
+        )
+        let originalFingerprint = PointsEngine.transactionFingerprint(
+            weekEnding: week,
+            memberIDs: [child.id],
+            entries: [original],
+            calendar: calendar
+        )
+        let fingerprintedClose = WeeklySettlement(
+            childID: child.id,
+            weekEnding: week,
+            startingPoints: 0,
+            debtCarriedIn: 0,
+            approvedEntryPoints: 10,
+            parentPotShare: 0,
+            finalPoints: 10,
+            cashAmount: Decimal(string: "0.10")!,
+            debtCarriedOut: 0,
+            transactionFingerprint: originalFingerprint,
+            confirmedAt: date(2026, 11, 2),
+            confirmedBy: "Parent"
+        )
+        let lateEntry = LedgerEntry(
+            memberID: child.id,
+            weekEnding: week,
+            title: "Helping",
+            points: 0,
+            kind: .reward,
+            status: .approved,
+            submittedBy: "Parent",
+            reviewedAt: date(2026, 11, 3)
+        )
+
+        XCTAssertEqual(PointsEngine.activePastWeekEndings(
+            currentWeekEnding: currentWeek,
+            members: [child],
+            entries: [original, lateEntry],
+            settlements: [fingerprintedClose],
+            calendar: calendar
+        ), [week])
+
+        let legacyClose = WeeklySettlement(
+            childID: child.id,
+            weekEnding: week,
+            startingPoints: 0,
+            debtCarriedIn: 0,
+            approvedEntryPoints: 10,
+            parentPotShare: 0,
+            finalPoints: 10,
+            cashAmount: Decimal(string: "0.10")!,
+            debtCarriedOut: 0,
+            confirmedAt: date(2026, 11, 2),
+            confirmedBy: "Parent"
+        )
+        XCTAssertEqual(PointsEngine.activePastWeekEndings(
+            currentWeekEnding: currentWeek,
+            members: [child],
+            entries: [original, lateEntry],
+            settlements: [legacyClose],
+            calendar: calendar
+        ), [week])
     }
 
     private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {

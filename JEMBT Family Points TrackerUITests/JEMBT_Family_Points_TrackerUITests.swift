@@ -39,7 +39,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(sign.label.contains("UI Test Family"))
 
         let existingItem = app.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH '15 minutes extra screen time'")
+            NSPredicate(format: "label BEGINSWITH 'Extra 15 minutes of screen time'")
         ).firstMatch
         XCTAssertTrue(existingItem.waitForExistence(timeout: 5))
         existingItem.tap()
@@ -91,13 +91,13 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Manage Items"].exists)
         XCTAssertTrue(app.staticTexts["Manage the family store"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'points to spend'")).count, 0)
-        XCTAssertTrue(app.staticTexts["15 minutes extra screen time"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Extra 15 minutes of screen time"].waitForExistence(timeout: 5))
 
         let addItem = app.descendants(matching: .any)["addStoreItem"]
         XCTAssertTrue(addItem.waitForExistence(timeout: 5))
 
         let existingItem = app.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH '15 minutes extra screen time'")
+            NSPredicate(format: "label BEGINSWITH 'Extra 15 minutes of screen time'")
         ).firstMatch
         XCTAssertTrue(existingItem.waitForExistence(timeout: 5))
         existingItem.tap()
@@ -121,14 +121,8 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Activity trends"].exists)
         app.buttons["Done"].tap()
 
-        let settlementLink = app.descendants(matching: .any)["familySettlementLink"]
-        XCTAssertTrue(settlementLink.exists)
-        settlementLink.tap()
-        XCTAssertTrue(app.navigationBars["Weekly Settlement"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.descendants(matching: .any)["reportingWeekPicker"].exists)
-        XCTAssertTrue(app.buttons["confirmGlobalSettlement"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["familySettlementLink"].exists)
         XCTAssertFalse(app.tabBars.buttons["Settlement"].exists)
-        app.navigationBars["Weekly Settlement"].buttons.firstMatch.tap()
 
         let storeTabAgain = app.tabBars.buttons["Store"]
         XCTAssertTrue(storeTabAgain.waitForExistence(timeout: 5))
@@ -230,6 +224,42 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
     }
 
     @MainActor
+    func testBirthdatePickerWaitsForExplicitConfirmation() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-birthday-confirmation-\(UUID().uuidString)@local"
+        app.launch()
+
+        app.signInAndCreateFamilyForAddingMembers()
+        app.openFamilyTab()
+        app.openAddMemberEditor()
+
+        let birthdateField = app.textFields["Birthdate"]
+        XCTAssertTrue(birthdateField.waitForExistence(timeout: 5))
+        birthdateField.tap()
+
+        let confirmButton = app.buttons["Use This Date"]
+        if !confirmButton.waitForExistence(timeout: 1) {
+            // The first tap can scroll this lower Form row into view without focusing it.
+            birthdateField.tap()
+        }
+        XCTAssertTrue(confirmButton.waitForExistence(timeout: 2))
+
+        let firstDateWheel = app.pickerWheels.firstMatch
+        XCTAssertTrue(firstDateWheel.waitForExistence(timeout: 3))
+        firstDateWheel.swipeUp()
+
+        XCTAssertTrue(
+            confirmButton.waitForExistence(timeout: 2),
+            "Changing a date component must not dismiss the birthdate picker."
+        )
+        XCTAssertTrue(firstDateWheel.exists)
+
+        confirmButton.tap()
+        XCTAssertFalse(firstDateWheel.exists)
+        XCTAssertNotEqual(birthdateField.value as? String, "Enter birthdate")
+    }
+
+    @MainActor
     func testAddMemberStartsWithNameFocused() throws {
         let app = XCUIApplication()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-member-focus-\(UUID().uuidString)@local"
@@ -326,18 +356,13 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
         let childPoints = app.staticTexts["pointsSummary-Mateo"]
         XCTAssertTrue(childPoints.waitForExistence(timeout: 5), "Expected points in Mateo's member card.")
-        XCTAssertTrue(app.staticTexts["Family overview"].exists)
-
-        let parentPoints = app.staticTexts["pointsSummary-Daddy"]
-        for _ in 0..<4 where !parentPoints.exists {
-            app.swipeUp()
-        }
-        XCTAssertTrue(parentPoints.waitForExistence(timeout: 5), "Expected points in Daddy's member card.")
+        let familyOverview = app.descendants(matching: .any)["familyOverviewBanner"]
+        XCTAssertTrue(familyOverview.exists)
+        XCTAssertTrue(app.descendants(matching: .any)["familyNameHeading"].exists)
+        XCTAssertLessThan(app.staticTexts["Children"].frame.minY, 220, "The compact summary should leave room for member cards.")
 
         let mateoCard = app.buttons["memberCard-Mateo"]
-        let daddyCard = app.buttons["memberCard-Daddy"]
         XCTAssertFalse(mateoCard.label.contains("Child"), "Expected the Children heading, not a role label in Mateo's card.")
-        XCTAssertFalse(daddyCard.label.contains("Parent"), "Expected the Parents heading, not a role label in Daddy's card.")
         XCTAssertFalse(app.tabBars.buttons["Dashboard"].exists)
     }
 
@@ -360,52 +385,61 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(saveButton.exists)
         XCTAssertFalse(saveButton.isEnabled)
 
-        let advocateAward = app.buttons["quickRule-Advocate Award"]
-        let readingAward = app.buttons["quickRule-Read to or with family"]
-        XCTAssertTrue(advocateAward.waitForExistence(timeout: 5))
-        advocateAward.tap()
-        for _ in 0..<4 where !readingAward.exists {
+        let dishesAward = app.buttons["quickRule-Wash the dishes"]
+        let laundryAward = app.buttons["quickRule-Help with laundry"]
+        XCTAssertTrue(dishesAward.waitForExistence(timeout: 5))
+        dishesAward.tap()
+        for _ in 0..<4 where !laundryAward.exists {
             app.swipeUp()
         }
-        XCTAssertTrue(readingAward.waitForExistence(timeout: 5))
-        readingAward.tap()
+        XCTAssertTrue(laundryAward.waitForExistence(timeout: 5))
+        laundryAward.tap()
+
+        let configureButton = app.buttons["configureSelectedActivities"]
+        XCTAssertTrue(configureButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(saveButton.isEnabled, "Defaults should support the fast select-and-save path.")
+        configureButton.tap()
+        XCTAssertTrue(app.navigationBars.buttons["Back"].waitForExistence(timeout: 5))
 
         let currentWeekday = Calendar.current.component(.weekday, from: Date.now)
         let secondWeekday = currentWeekday == 7 ? 1 : currentWeekday + 1
-        let advocateCurrentDay = app.buttons["activityDay-Advocate Award-\(currentWeekday)"]
-        let advocateSecondDay = app.buttons["activityDay-Advocate Award-\(secondWeekday)"]
-        let readingCurrentDay = app.buttons["activityDay-Read to or with family-\(currentWeekday)"]
-        let readingSecondDay = app.buttons["activityDay-Read to or with family-\(secondWeekday)"]
-        for _ in 0..<4 where !advocateCurrentDay.exists || !advocateSecondDay.exists {
+        let dishesCurrentDay = app.buttons["activityDay-Wash the dishes-\(currentWeekday)"]
+        let dishesSecondDay = app.buttons["activityDay-Wash the dishes-\(secondWeekday)"]
+        let laundryCurrentDay = app.buttons["activityDay-Help with laundry-\(currentWeekday)"]
+        let laundrySecondDay = app.buttons["activityDay-Help with laundry-\(secondWeekday)"]
+        for _ in 0..<4 where !dishesCurrentDay.exists || !dishesSecondDay.exists {
             app.swipeUp()
         }
-        XCTAssertTrue(advocateCurrentDay.waitForExistence(timeout: 5))
-        XCTAssertEqual(advocateCurrentDay.value as? String, "Selected")
-        XCTAssertEqual(advocateSecondDay.value as? String, "Not selected")
-        advocateSecondDay.tap()
-        XCTAssertEqual(advocateSecondDay.value as? String, "Selected")
-        advocateCurrentDay.tap()
-        advocateSecondDay.tap()
+        XCTAssertTrue(dishesCurrentDay.waitForExistence(timeout: 5))
+        XCTAssertEqual(dishesCurrentDay.value as? String, "Selected")
+        XCTAssertEqual(dishesSecondDay.value as? String, "Not selected")
+        dishesSecondDay.tap()
+        XCTAssertEqual(dishesSecondDay.value as? String, "Selected")
+        dishesCurrentDay.tap()
+        dishesSecondDay.tap()
         XCTAssertFalse(saveButton.isEnabled)
-        advocateCurrentDay.tap()
-        advocateSecondDay.tap()
+        dishesCurrentDay.tap()
+        dishesSecondDay.tap()
         XCTAssertTrue(saveButton.isEnabled)
-        let advocatePoints = app.descendants(matching: .any)["quickActivityPoints-Advocate Award"]
-        XCTAssertTrue(advocatePoints.waitForExistence(timeout: 5))
-        for _ in 0..<4 where !readingCurrentDay.exists || !readingSecondDay.exists {
+        let dishesPoints = app.descendants(matching: .any)["quickActivityPoints-Wash the dishes"]
+        XCTAssertTrue(dishesPoints.waitForExistence(timeout: 5))
+        let dishesTotal = app.descendants(matching: .any)["quickActivityTotal-Wash the dishes"]
+        XCTAssertTrue(dishesTotal.waitForExistence(timeout: 5))
+        XCTAssertTrue(dishesTotal.label.contains("150"))
+        for _ in 0..<4 where !laundryCurrentDay.exists || !laundrySecondDay.exists {
             app.swipeUp()
         }
-        XCTAssertTrue(readingCurrentDay.waitForExistence(timeout: 5))
-        XCTAssertEqual(readingCurrentDay.value as? String, "Selected")
-        XCTAssertEqual(readingSecondDay.value as? String, "Not selected")
+        XCTAssertTrue(laundryCurrentDay.waitForExistence(timeout: 5))
+        XCTAssertEqual(laundryCurrentDay.value as? String, "Selected")
+        XCTAssertEqual(laundrySecondDay.value as? String, "Not selected")
 
-        let readingPoints = app.descendants(matching: .any)["quickActivityPoints-Read to or with family"]
-        let readingQuantity = app.descendants(matching: .any)["quickActivityQuantity-Read to or with family"]
-        for _ in 0..<4 where !readingPoints.exists || !readingQuantity.exists {
+        let laundryPoints = app.descendants(matching: .any)["quickActivityPoints-Help with laundry"]
+        let laundryQuantity = app.descendants(matching: .any)["quickActivityQuantity-Help with laundry"]
+        for _ in 0..<4 where !laundryPoints.exists || !laundryQuantity.exists {
             app.swipeUp()
         }
-        XCTAssertTrue(readingPoints.waitForExistence(timeout: 5))
-        XCTAssertEqual(readingQuantity.value as? String, "1")
+        XCTAssertTrue(laundryPoints.waitForExistence(timeout: 5))
+        XCTAssertEqual(laundryQuantity.value as? String, "1")
         XCTAssertTrue(saveButton.isEnabled)
         saveButton.tap()
 
@@ -420,49 +454,29 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["reportingWeekPicker"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["weeklyLedgerHeader"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["ledgerStartingValue-Mateo"].waitForExistence(timeout: 5))
-        let advocateRows = app.descendants(matching: .any).matching(identifier: "ledgerSummary-Mateo-Advocate Award")
-        XCTAssertGreaterThanOrEqual(advocateRows.count, 2)
-        XCTAssertTrue(advocateRows.firstMatch.label.localizedCaseInsensitiveContains("recorded by"))
-        XCTAssertTrue(app.descendants(matching: .any)["ledgerSummary-Mateo-Read to or with family"].waitForExistence(timeout: 5))
-        let approvedStatus = app.descendants(matching: .any).matching(identifier: "ledgerStatus-Mateo-Advocate Award").firstMatch
-        XCTAssertTrue(approvedStatus.waitForExistence(timeout: 5))
-        XCTAssertEqual(approvedStatus.label, "Approved")
 
-        let itemSort = app.buttons["ledgerSort-item"]
-        let typeSort = app.buttons["ledgerSort-type"]
-        XCTAssertTrue(itemSort.waitForExistence(timeout: 5))
-        itemSort.tap()
-        typeSort.tap()
-        let resetSort = app.buttons["resetLedgerSort"]
-        XCTAssertTrue(resetSort.exists)
-        XCTAssertTrue(resetSort.isEnabled)
-        resetSort.tap()
-        XCTAssertFalse(resetSort.isEnabled)
-
-        advocateRows.firstMatch.doubleTap()
-        XCTAssertTrue(app.navigationBars["Edit Ledger Item"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Advocate Award"].exists)
-        XCTAssertTrue(app.staticTexts["Mateo"].exists)
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'Mommy' OR label CONTAINS[c] 'Parent'")).firstMatch.exists)
-        app.navigationBars["Edit Ledger Item"].buttons["Cancel"].tap()
-
-        let readingRow = app.descendants(matching: .any)
-            .matching(identifier: "ledgerSummary-Mateo-Read to or with family")
-            .firstMatch
-        readingRow.doubleTap()
-        XCTAssertTrue(app.navigationBars["Edit Ledger Item"].waitForExistence(timeout: 5))
-        let typedQuantity = app.descendants(matching: .any)["ledgerQuantity"]
-        XCTAssertTrue(typedQuantity.waitForExistence(timeout: 5))
-        XCTAssertTrue(typedQuantity.label.localizedCaseInsensitiveContains("minute"))
-        app.navigationBars["Edit Ledger Item"].buttons["Cancel"].tap()
-
-        app.navigationBars["Weekly Ledger"].buttons.firstMatch.tap()
-        let penalizeDaddy = app.buttons["Penalize Daddy"]
-        for _ in 0..<5 where !penalizeDaddy.exists {
-            app.swipeUp()
+        let dayRows = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "ledgerDay-Mateo-")
+        )
+        XCTAssertGreaterThanOrEqual(dayRows.count, 2, "Expected one collapsed row for each active day.")
+        let dishesRows = app.descendants(matching: .any).matching(identifier: "ledgerSummary-Mateo-Wash the dishes")
+        for index in 0..<dayRows.count where dishesRows.count < 2 {
+            let dayRow = dayRows.element(boundBy: index)
+            XCTAssertTrue(dayRow.waitForExistence(timeout: 5))
+            dayRow.tap()
+            _ = dishesRows.element(boundBy: 1).waitForExistence(timeout: 1)
         }
-        XCTAssertTrue(penalizeDaddy.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["Reward Daddy"].exists)
+
+        XCTAssertGreaterThanOrEqual(dishesRows.count, 2)
+        XCTAssertTrue(app.descendants(matching: .any)["ledgerSummary-Mateo-Help with laundry"].waitForExistence(timeout: 5))
+
+        dishesRows.firstMatch.doubleTap()
+        XCTAssertTrue(app.navigationBars["Edit Ledger Item"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Wash the dishes"].exists)
+        XCTAssertTrue(app.staticTexts["Mateo"].exists)
+        XCTAssertTrue(app.staticTexts["Recorded by"].exists)
+        app.navigationBars["Edit Ledger Item"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Weekly Ledger"].waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -498,16 +512,12 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
         XCTAssertTrue(app.navigationBars["Weekly Ledger"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["reportingWeekPicker"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.descendants(matching: .any)["ledgerSettlementLink"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.descendants(matching: .any)["ledgerSettlementLink"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["weeklyLedgerHeader"].waitForExistence(timeout: 5))
 
-        let leadingColumns = ["type", "status", "day", "person", "item"].map {
-            app.buttons["ledgerSort-\($0)"]
-        }
-        leadingColumns.forEach { XCTAssertTrue($0.waitForExistence(timeout: 5)) }
-        for (left, right) in zip(leadingColumns, leadingColumns.dropFirst()) {
-            XCTAssertLessThan(left.frame.minX, right.frame.minX)
-        }
+        XCTAssertTrue(app.staticTexts["Starting points"].exists)
+        XCTAssertTrue(app.staticTexts["Activity by day"].exists)
+        XCTAssertFalse(app.buttons["ledgerSort-item"].exists)
 
         let copyWeek = app.buttons["copyLedgerWeek"]
         XCTAssertTrue(copyWeek.waitForExistence(timeout: 5))

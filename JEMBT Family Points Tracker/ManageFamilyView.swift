@@ -6,6 +6,9 @@ import SwiftUI
 #if canImport(PhotosUI)
 import PhotosUI
 #endif
+#if canImport(ImagePlayground)
+import ImagePlayground
+#endif
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)
@@ -78,58 +81,18 @@ struct ManageFamilyView: View {
         }
     }
 
+    private var activePastWeekEndings: [Date] {
+        PointsEngine.activePastWeekEndings(
+            members: familyMembers,
+            entries: familyEntries,
+            settlements: settlements,
+            rules: rules.filter { $0.familyID == appleIDManager.currentFamily?.id },
+            cashValuePerPoint: appleIDManager.currentFamily?.effectiveCashValuePerPoint ?? Decimal(string: "0.01")!
+        )
+    }
+
     var body: some View {
         List {
-            Section("Family overview") {
-                VStack(spacing: 0) {
-                    ReportingWeekPicker()
-                        .padding(.vertical, 4)
-                    Divider()
-                    Button {
-                        showingWeeklyLedger = true
-                    } label: {
-                        HStack {
-                            Text("View weekly ledger")
-                            Spacer()
-                            Text(pendingApprovalCount == 0
-                                 ? "No pending submissions"
-                                 : "\(pendingApprovalCount) waiting")
-                                .foregroundStyle(pendingApprovalCount == 0 ? Color.secondary : Color.orange)
-                            Image(systemName: "chevron.right")
-                                .font(.caption.bold())
-                                .foregroundStyle(.tertiary)
-                        }
-                        .contentShape(Rectangle())
-                        .padding(.vertical, 12)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("weeklyLedgerLink")
-                    if canChooseReportingPeriod {
-                        Divider()
-                        Button {
-                            showingSettlement = true
-                        } label: {
-                            HStack {
-                                Label("Settle / Close Books", systemImage: "checkmark.seal.fill")
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption.bold())
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .contentShape(Rectangle())
-                            .padding(.vertical, 12)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("familySettlementLink")
-                    }
-                }
-                .padding(.horizontal, 14)
-                .familyCardSurface(accent: .accentColor)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 8, trailing: 14))
-            }
-
             if let errorMessage {
                 Section {
                     Text(errorMessage)
@@ -177,7 +140,10 @@ struct ManageFamilyView: View {
             .ignoresSafeArea()
             .accessibilityHidden(true)
         }
-        .navigationTitle(displayedFamilyName)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            familyOverviewBanner
+        }
+        .navigationTitle("Family")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if canEdit {
@@ -238,13 +204,70 @@ struct ManageFamilyView: View {
         }
     }
 
+    private var familyOverviewBanner: some View {
+        HStack(spacing: 8) {
+            Image("FamilyPageWallpaper")
+                .resizable()
+                .scaledToFill()
+                .frame(width: 40, height: 40)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .accessibilityHidden(true)
+
+            Text(displayedFamilyName)
+                .font(.headline)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .layoutPriority(1)
+                .accessibilityIdentifier("familyNameHeading")
+
+            ReportingWeekPicker(isCompact: true)
+                .frame(maxWidth: 170)
+
+            Button {
+                showingWeeklyLedger = true
+            } label: {
+                Image(systemName: pendingApprovalCount == 0
+                    ? "list.bullet.clipboard"
+                    : "list.bullet.clipboard.fill")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel(
+                pendingApprovalCount == 0
+                    ? "Weekly Ledger"
+                    : "Weekly Ledger, \(pendingApprovalCount) waiting"
+            )
+            .accessibilityIdentifier("weeklyLedgerLink")
+
+            if canChooseReportingPeriod && !activePastWeekEndings.isEmpty {
+                Button {
+                    showingSettlement = true
+                } label: {
+                    Image(systemName: "checkmark.seal.fill")
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityLabel("Review and Close")
+                .accessibilityIdentifier("familySettlementLink")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
+        .clipped()
+        .background(Color(.systemBackground))
+        .overlay(alignment: .bottom) { Divider() }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("familyOverviewBanner")
+    }
+
     @ViewBuilder
     private func memberSection(title: String, role: MemberRole) -> some View {
         let roleMembers = familyMembers.filter { $0.role == role }
         if !roleMembers.isEmpty {
             Section(title) {
                 ScrollView(.horizontal) {
-                    LazyHStack(spacing: 12) {
+                    LazyHStack(spacing: 4) {
                         ForEach(roleMembers) { member in
                             MemberAdministrationRow(
                                 member: member,
@@ -264,11 +287,18 @@ struct ManageFamilyView: View {
                                 },
                                 onSave: { draft in try update(member, with: draft) }
                             )
-                            .containerRelativeFrame(.horizontal, count: 1, span: 1, spacing: 12)
-                            .scrollTransition(.interactive.threshold(.visible(0.72))) { card, phase in
+                            .containerRelativeFrame(.horizontal) { length, _ in
+                                min(620, length * 0.94)
+                            }
+                            .scrollTransition(.interactive.threshold(.visible(0.55))) { card, phase in
                                 card
-                                    .scaleEffect(phase.isIdentity ? 1 : 0.91)
-                                    .opacity(phase.isIdentity ? 1 : 0.72)
+                                    .scaleEffect(phase.isIdentity ? 1 : 0.84)
+                                    .opacity(phase.isIdentity ? 1 : 0.62)
+                                    .rotation3DEffect(
+                                        .degrees(phase.value * -4),
+                                        axis: (x: 0, y: 1, z: 0),
+                                        perspective: 0.3
+                                    )
                             }
                             .contextMenu {
                                 if canEdit {
@@ -282,9 +312,10 @@ struct ManageFamilyView: View {
                     .scrollTargetLayout()
                 }
                 .scrollIndicators(.hidden)
+                .scrollClipDisabled()
                 .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
                 .contentMargins(.horizontal, 2, for: .scrollContent)
-                .frame(height: 205)
+                .frame(height: 240)
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 2, leading: 14, bottom: 8, trailing: 14))
@@ -633,8 +664,11 @@ private struct MemberAdministrationRow: View {
                         Label(email, systemImage: "envelope")
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .contentShape(Rectangle())
             .font(.caption)
             .foregroundStyle(.primary)
             .accessibilityIdentifier("memberCard-\(member.name)")
@@ -664,9 +698,9 @@ private struct MemberAdministrationRow: View {
                     if let onReward {
                         Button(action: onReward) {
                             Image(systemName: EntryKind.reward.quickActionSymbolName)
-                                .font(.title2)
+                                .font(.system(size: 28, weight: .semibold))
                                 .foregroundStyle(.green)
-                                .frame(width: 40, height: 36)
+                                .frame(width: 48, height: 44)
                                 .background(.green.opacity(0.14), in: Capsule())
                         }
                         .buttonStyle(.plain)
@@ -675,10 +709,10 @@ private struct MemberAdministrationRow: View {
                     if let onPenalty {
                         Button(action: onPenalty) {
                             Image(systemName: EntryKind.penalty.quickActionSymbolName)
-                                .font(.title2)
+                                .font(.system(size: 28, weight: .semibold))
                                 .foregroundStyle(.red)
-                                .frame(width: 40, height: 36)
-                                .background(.indigo.opacity(0.14), in: Capsule())
+                                .frame(width: 48, height: 44)
+                                .background(.red.opacity(0.14), in: Capsule())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Penalize \(member.name)")
@@ -686,8 +720,8 @@ private struct MemberAdministrationRow: View {
                 }
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 215, alignment: .topLeading)
         .familyCardSurface(accent: accentColor)
     }
 
@@ -925,6 +959,7 @@ struct QuickActivityRequest: Identifiable {
 private struct QuickActivityDraft {
     var quantity: Double
     var points: Int
+    var pointsOverridden: Bool
     var weekdays: Set<Int>
 }
 
@@ -940,6 +975,7 @@ struct QuickActivityView: View {
     @Query private var entries: [LedgerEntry]
     @State private var drafts: [UUID: QuickActivityDraft] = [:]
     @State private var notes = ""
+    @State private var isConfiguring = false
     @State private var errorMessage: String?
 
     init(member: FamilyMember, kind: EntryKind, weekEnding: Date) {
@@ -966,72 +1002,98 @@ struct QuickActivityView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section(kind == .reward ? "Choose an award" : "Choose a penalty") {
-                    ForEach(rules) { rule in
-                        Button {
-                            select(rule)
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: rule.iconName)
-                                    .foregroundStyle(kind == .reward ? .green : .indigo)
-                                    .frame(width: 28)
-                                Text(rule.title)
-                                    .foregroundStyle(.primary)
-                                Spacer()
-                                if drafts[rule.id] != nil {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.tint)
+                if isConfiguring {
+                    Section {
+                        Label(
+                            "Adjust days, quantities, point overrides, and notes before saving.",
+                            systemImage: "slider.horizontal.3"
+                        )
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    ForEach(selectedRules) { rule in
+                        Section(rule.title) {
+                            WeekdaySelector(
+                                weekEnding: weekEnding,
+                                selection: weekdaysBinding(for: rule),
+                                identifierPrefix: "activityDay-\(rule.title)"
+                            )
+                            if rule.frequencyKind == .time || rule.countSchedule == .every {
+                                LabeledContent(quantityTitle(for: rule)) {
+                                    HStack(spacing: 6) {
+                                        TextField("Quantity", value: quantityBinding(for: rule), format: .number)
+                                            .keyboardType(.decimalPad)
+                                            .multilineTextAlignment(.trailing)
+                                            .frame(width: 90)
+                                            .accessibilityIdentifier("quickActivityQuantity-\(rule.title)")
+                                        Text(quantityUnit(for: rule))
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                             }
-                        }
-                        .accessibilityIdentifier("quickRule-\(rule.title)")
-                    }
-                }
-
-                ForEach(selectedRules) { rule in
-                    Section(rule.title) {
-                        WeekdaySelector(
-                            weekEnding: weekEnding,
-                            selection: weekdaysBinding(for: rule),
-                            identifierPrefix: "activityDay-\(rule.title)"
-                        )
-                        if rule.frequencyKind == .time {
-                            LabeledContent("Quantity") {
-                                HStack(spacing: 6) {
-                                    TextField("Quantity", value: quantityBinding(for: rule), format: .number)
-                                        .keyboardType(.decimalPad)
+                            LabeledContent(pointsLabel(for: rule)) {
+                                HStack(spacing: 8) {
+                                    TextField("Points", value: pointsBinding(for: rule), format: .number)
+                                        .keyboardType(.numbersAndPunctuation)
                                         .multilineTextAlignment(.trailing)
                                         .frame(width: 90)
-                                        .accessibilityIdentifier("quickActivityQuantity-\(rule.title)")
-                                    Text(rule.timeUnit.label(for: drafts[rule.id]?.quantity ?? rule.defaultEntryQuantity))
-                                        .foregroundStyle(.secondary)
+                                        .accessibilityIdentifier("quickActivityPoints-\(rule.title)")
+                                    Stepper("", value: pointsBinding(for: rule), in: pointRange)
+                                        .labelsHidden()
                                 }
                             }
-                        }
-                        LabeledContent("Points") {
-                            HStack(spacing: 8) {
-                                TextField("Points", value: pointsBinding(for: rule), format: .number)
-                                    .keyboardType(.numbersAndPunctuation)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 90)
-                                    .accessibilityIdentifier("quickActivityPoints-\(rule.title)")
-                                Stepper("", value: pointsBinding(for: rule), in: pointRange)
-                                    .labelsHidden()
+                            if let total = assignmentTotal(for: rule), selectedDateCount(for: rule) > 1 {
+                                LabeledContent("Assignment total") {
+                                    Text(total, format: .number)
+                                        .fontWeight(.semibold)
+                                        .accessibilityIdentifier("quickActivityTotal-\(rule.title)")
+                                }
+                            }
+                            if drafts[rule.id]?.pointsOverridden == true {
+                                Button("Use calculated points") {
+                                    resetCalculatedPoints(for: rule)
+                                }
+                                .font(.caption)
+                            }
+                            if !rule.guidance.isEmpty {
+                                Text(rule.guidance)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
-                        if !rule.guidance.isEmpty {
-                            Text(rule.guidance)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
                     }
-                }
 
-                if !selectedRules.isEmpty {
                     Section("All selected entries") {
                         TextField("Notes (optional)", text: $notes, axis: .vertical)
                             .lineLimit(2...5)
                             .accessibilityIdentifier("quickActivityNotes")
+                    }
+                } else {
+                    Section {
+                        ForEach(rules) { rule in
+                            Button {
+                                select(rule)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: rule.iconName)
+                                        .foregroundStyle(kind == .reward ? .green : .red)
+                                        .frame(width: 28)
+                                    Text(rule.title)
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    if drafts[rule.id] != nil {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.tint)
+                                    }
+                                }
+                            }
+                            .accessibilityIdentifier("quickRule-\(rule.title)")
+                        }
+                    } header: {
+                        Text(kind == .reward ? "Choose awards" : "Choose penalties")
+                    } footer: {
+                        Text("Select one or more items. Save immediately with the defaults, or configure days, quantities, points, and notes below.")
                     }
                 }
 
@@ -1039,11 +1101,32 @@ struct QuickActivityView: View {
                     Text(errorMessage).foregroundStyle(.red)
                 }
             }
+            .safeAreaInset(edge: .bottom) {
+                if !isConfiguring && !selectedRules.isEmpty {
+                    Button {
+                        isConfiguring = true
+                    } label: {
+                        Label(
+                            "Configure \(selectedRules.count) selected \(selectedRules.count == 1 ? "item" : "items")",
+                            systemImage: "slider.horizontal.3"
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.horizontal)
+                    .padding(.vertical, 10)
+                    .background(.bar)
+                    .accessibilityIdentifier("configureSelectedActivities")
+                }
+            }
             .navigationTitle("\(kind == .reward ? "Award" : "Penalty") • \(member.name)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button(isConfiguring ? "Back" : "Cancel") {
+                        if isConfiguring { isConfiguring = false }
+                        else { dismiss() }
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save", action: save)
@@ -1067,6 +1150,7 @@ struct QuickActivityView: View {
         drafts[rule.id] = QuickActivityDraft(
             quantity: quantity,
             points: calculatedPoints(for: rule, quantity: quantity),
+            pointsOverridden: false,
             weekdays: [PointsEngine.defaultWeekday(inWeekEnding: weekEnding)]
         )
         errorMessage = nil
@@ -1080,6 +1164,7 @@ struct QuickActivityView: View {
                 drafts[rule.id] = QuickActivityDraft(
                     quantity: quantity,
                     points: calculatedPoints(for: rule, quantity: quantity),
+                    pointsOverridden: false,
                     weekdays: drafts[rule.id]?.weekdays ?? [PointsEngine.defaultWeekday(inWeekEnding: weekEnding)]
                 )
             }
@@ -1092,6 +1177,7 @@ struct QuickActivityView: View {
             set: { points in
                 guard var draft = drafts[rule.id] else { return }
                 draft.points = min(max(points, pointRange.lowerBound), pointRange.upperBound)
+                draft.pointsOverridden = true
                 drafts[rule.id] = draft
             }
         )
@@ -1104,25 +1190,76 @@ struct QuickActivityView: View {
                 guard var draft = drafts[rule.id] else { return }
                 draft.weekdays = weekdays
                 drafts[rule.id] = draft
+                if !draft.pointsOverridden {
+                    resetCalculatedPoints(for: rule)
+                }
             }
         )
     }
 
-    private func calculatedPoints(for rule: RuleTemplate, quantity: Double) -> Int {
-        let points = rule.incrementalPoints(
-            existingQuantity: existingQuantity(for: rule),
-            additionalQuantity: quantity
-        )
-        return min(max(points, pointRange.lowerBound), pointRange.upperBound)
+    private func quantityTitle(for rule: RuleTemplate) -> String {
+        rule.frequencyKind == .time ? "Duration" : "Quantity"
     }
 
-    private func existingQuantity(for rule: RuleTemplate) -> Double {
+    private func quantityUnit(for rule: RuleTemplate) -> String {
+        let quantity = drafts[rule.id]?.quantity ?? rule.defaultEntryQuantity
+        return rule.frequencyKind == .time
+            ? rule.timeUnit.label(for: quantity)
+            : rule.measurementUnit.label(for: quantity)
+    }
+
+    private func resetCalculatedPoints(for rule: RuleTemplate) {
+        guard var draft = drafts[rule.id] else { return }
+        draft.points = calculatedPoints(for: rule, quantity: draft.quantity)
+        draft.pointsOverridden = false
+        drafts[rule.id] = draft
+    }
+
+    private func calculatedPoints(for rule: RuleTemplate, quantity: Double) -> Int {
+        pointAllocations(for: rule, quantity: quantity).first ?? 0
+    }
+
+    private func selectedDates(for rule: RuleTemplate) -> [Date] {
+        let weekdays = drafts[rule.id]?.weekdays ?? [PointsEngine.defaultWeekday(inWeekEnding: weekEnding)]
+        return PointsEngine.dates(inWeekEnding: weekEnding, matchingWeekdays: weekdays)
+    }
+
+    private func selectedDateCount(for rule: RuleTemplate) -> Int {
+        selectedDates(for: rule).count
+    }
+
+    private func pointsLabel(for rule: RuleTemplate) -> String {
+        guard selectedDateCount(for: rule) > 1 else { return "Points" }
+        return drafts[rule.id]?.pointsOverridden == true ? "Points per day" : "First day points"
+    }
+
+    private func pointAllocations(for rule: RuleTemplate, quantity: Double) -> [Int] {
+        let dates = selectedDates(for: rule)
+        return rule.incrementalPointAllocations(
+            existingQuantities: dates.map { existingQuantity(for: rule, on: $0) },
+            additionalQuantity: quantity
+        ).map { min(max($0, pointRange.lowerBound), pointRange.upperBound) }
+    }
+
+    private func assignmentTotal(for rule: RuleTemplate) -> Int? {
+        guard let draft = drafts[rule.id] else { return nil }
+        if draft.pointsOverridden {
+            return draft.points * selectedDateCount(for: rule)
+        }
+        return pointAllocations(for: rule, quantity: draft.quantity).reduce(0, +)
+    }
+
+    private func existingQuantity(for rule: RuleTemplate, on occurrenceDate: Date? = nil) -> Double {
         entries
             .filter {
-                $0.memberID == member.id &&
-                $0.ruleID == rule.id &&
-                $0.status != .rejected &&
-                Calendar.current.isDate($0.weekEnding, inSameDayAs: weekEnding)
+                guard $0.memberID == member.id,
+                      $0.ruleID == rule.id,
+                      $0.status != .rejected,
+                      Calendar.current.isDate($0.weekEnding, inSameDayAs: weekEnding) else {
+                    return false
+                }
+                guard rule.maximumPeriod == .daily, let occurrenceDate else { return true }
+                return Calendar.current.isDate(PointsEngine.occurrenceDate(for: $0), inSameDayAs: occurrenceDate)
             }
             .reduce(0.0) { $0 + max(0, $1.quantity) }
     }
@@ -1148,7 +1285,11 @@ struct QuickActivityView: View {
                 inWeekEnding: weekEnding,
                 matchingWeekdays: draft.weekdays
             )
-            for occurredAt in occurrenceDates {
+            let calculatedPoints = pointAllocations(for: rule, quantity: draft.quantity)
+            for (index, occurredAt) in occurrenceDates.enumerated() {
+                let entryPoints = draft.pointsOverridden
+                    ? draft.points
+                    : calculatedPoints[index]
                 modelContext.insert(
                     LedgerEntry(
                         memberID: member.id,
@@ -1157,7 +1298,7 @@ struct QuickActivityView: View {
                         weekEnding: weekEnding,
                         title: rule.title,
                         notes: trimmedNotes,
-                        points: draft.points,
+                        points: entryPoints,
                         kind: kind,
                         status: submissionKind.requiresParentApproval ? .pending : .approved,
                         submittedBy: recorder,
@@ -1225,8 +1366,8 @@ struct WeeklyLedgerView: View {
     @Query private var members: [FamilyMember]
     @Query private var entries: [LedgerEntry]
     @Query private var rules: [RuleTemplate]
+    @Query private var settlements: [WeeklySettlement]
     @State private var reviewErrorMessage: String?
-    @State private var sortDescriptors = PointsEngine.defaultLedgerSort
     @State private var editingSummary: LedgerSummary?
     @State private var showingBulkCopy = false
 
@@ -1243,17 +1384,33 @@ struct WeeklyLedgerView: View {
     }
 
     private var summaries: [LedgerSummary] {
-        let summaries = PointsEngine.ledgerSummaries(
+        PointsEngine.ledgerSummaries(
             weekEnding: weekEnding,
             memberIDs: Set(familyMembers.map(\.id)),
             entries: entries,
             rules: rules.filter { $0.familyID == appleIDManager.currentFamily?.id }
         )
-        return PointsEngine.sortLedgerSummaries(
-            summaries,
-            by: sortDescriptors,
-            memberNames: Dictionary(uniqueKeysWithValues: familyMembers.map { ($0.id, $0.name) })
-        )
+    }
+
+    private var dayGroups: [LedgerDayGroup] {
+        let grouped = Dictionary(grouping: summaries) {
+            LedgerDayGroup.Key(
+                memberID: $0.memberID,
+                occurredAt: Calendar.current.startOfDay(for: $0.occurredAt)
+            )
+        }
+        let memberOrder = Dictionary(uniqueKeysWithValues: sortedMembers.enumerated().map { ($0.element.id, $0.offset) })
+        return grouped.map { key, summaries in
+            LedgerDayGroup(key: key, summaries: summaries.sorted {
+                $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            })
+        }
+        .sorted {
+            let lhsOrder = memberOrder[$0.memberID] ?? .max
+            let rhsOrder = memberOrder[$1.memberID] ?? .max
+            if lhsOrder != rhsOrder { return lhsOrder < rhsOrder }
+            return $0.occurredAt < $1.occurredAt
+        }
     }
 
     private var sortedMembers: [FamilyMember] {
@@ -1272,6 +1429,16 @@ struct WeeklyLedgerView: View {
         )
     }
 
+    private var activePastWeekEndings: [Date] {
+        PointsEngine.activePastWeekEndings(
+            members: familyMembers,
+            entries: entries,
+            settlements: settlements,
+            rules: rules.filter { $0.familyID == appleIDManager.currentFamily?.id },
+            cashValuePerPoint: appleIDManager.currentFamily?.effectiveCashValuePerPoint ?? Decimal(string: "0.01")!
+        )
+    }
+
     var body: some View {
         Group {
             if !hasRows {
@@ -1281,36 +1448,34 @@ struct WeeklyLedgerView: View {
                     description: Text("No rewards or penalties were recorded for this week.")
                 )
             } else {
-                ScrollView([.horizontal, .vertical]) {
-                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        Section {
-                            ForEach(sortedMembers.filter { $0.role == .child }) { member in
-                                WeeklyLedgerStartingRow(
-                                    memberName: member.name,
-                                    points: PointsEngine.startingPoints(for: member, weekEnding: weekEnding)
-                                )
+                List {
+                    Section("Starting points") {
+                        ForEach(sortedMembers.filter { $0.role == .child }) { member in
+                            HStack {
+                                Label(member.name, systemImage: "flag.checkered")
+                                Spacer()
+                                Text(signed(PointsEngine.startingPoints(for: member, weekEnding: weekEnding)))
+                                    .fontWeight(.semibold)
                             }
-                            ForEach(summaries) { summary in
-                                WeeklyLedgerRow(
-                                    summary: summary,
-                                    memberName: memberName(for: summary.memberID),
-                                    canReview: canReview,
-                                    onEdit: { editingSummary = summary },
-                                    onApproveItem: { review(summary, as: .approved) },
-                                    onRejectItem: { review(summary, as: .rejected) }
-                                )
-                            }
-                        } header: {
-                            WeeklyLedgerHeader(
-                                sortDescriptors: sortDescriptors,
-                                onSelectSort: selectSort
+                            .accessibilityIdentifier("ledgerStartingValue-\(member.name)")
+                        }
+                    }
+
+                    Section("Activity by day") {
+                        ForEach(dayGroups) { group in
+                            LedgerDayDisclosureRow(
+                                group: group,
+                                memberName: memberName(for: group.memberID),
+                                entries: entries,
+                                canReview: canReview,
+                                onEdit: { editingSummary = $0 },
+                                onReviewSummary: { summary, status in review(summary, as: status) },
+                                onReviewEntry: { entry, status in review([entry], as: status) }
                             )
                         }
                     }
-                    .frame(minWidth: WeeklyLedgerColumns.tableWidth, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 12)
                 }
+                .accessibilityIdentifier("weeklyLedgerHeader")
             }
         }
         .navigationTitle("Weekly Ledger")
@@ -1337,23 +1502,6 @@ struct WeeklyLedgerView: View {
                     .accessibilityIdentifier("copyLedgerWeek")
                 }
             }
-            if canReview {
-                ToolbarItem(placement: .primaryAction) {
-                    NavigationLink {
-                        SettlementView()
-                    } label: {
-                        Label("Close Books", systemImage: "checkmark.seal.fill")
-                    }
-                    .accessibilityIdentifier("ledgerSettlementLink")
-                }
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button("Reset Sort", systemImage: "arrow.up.arrow.down") {
-                    sortDescriptors = PointsEngine.defaultLedgerSort
-                }
-                .disabled(sortDescriptors == PointsEngine.defaultLedgerSort)
-                .accessibilityIdentifier("resetLedgerSort")
-            }
         }
         .sheet(item: $editingSummary) { summary in
             LedgerEntryEditorView(
@@ -1373,7 +1521,33 @@ struct WeeklyLedgerView: View {
         .safeAreaInset(edge: .top) {
             VStack(spacing: 4) {
                 ReportingWeekPicker()
-                    .font(.caption)
+                    .padding(.horizontal, 12)
+                if canReview && !activePastWeekEndings.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("You have \(activePastWeekEndings.count) past \(activePastWeekEndings.count == 1 ? "week" : "weeks") with active transactions:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        NavigationLink {
+                            SettlementView()
+                        } label: {
+                            HStack {
+                                Label("Review and Close", systemImage: "checkmark.seal.fill")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("ledgerSettlementLink")
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 8)
+                }
                 if let reviewErrorMessage {
                     Text(reviewErrorMessage)
                         .font(.caption)
@@ -1390,17 +1564,8 @@ struct WeeklyLedgerView: View {
         familyMembers.first { $0.id == id }?.name ?? "Unknown"
     }
 
-    private func selectSort(_ column: LedgerSortColumn) {
-        if sortDescriptors == PointsEngine.defaultLedgerSort {
-            sortDescriptors = [LedgerSortDescriptor(column: column, ascending: true)]
-            return
-        }
-        if let index = sortDescriptors.firstIndex(where: { $0.column == column }) {
-            let current = sortDescriptors[index]
-            sortDescriptors[index] = LedgerSortDescriptor(column: column, ascending: !current.ascending)
-        } else {
-            sortDescriptors.append(LedgerSortDescriptor(column: column, ascending: true))
-        }
+    private func signed(_ value: Int) -> String {
+        value > 0 ? "+\(value.formatted())" : value.formatted()
     }
 
     private func review(_ summary: LedgerSummary, as status: ApprovalStatus) {
@@ -1439,6 +1604,213 @@ struct WeeklyLedgerView: View {
     }
 }
 
+private struct LedgerDayGroup: Identifiable {
+    struct Key: Hashable {
+        let memberID: UUID
+        let occurredAt: Date
+    }
+
+    let key: Key
+    let summaries: [LedgerSummary]
+
+    var id: String { "\(memberID.uuidString)-\(occurredAt.timeIntervalSinceReferenceDate)" }
+    var memberID: UUID { key.memberID }
+    var occurredAt: Date { key.occurredAt }
+    var activeCount: Int { summaries.reduce(0) { $0 + $1.approvedCount + $1.pendingCount } }
+    var activePoints: Int { summaries.reduce(0) { $0 + $1.approvedPoints + $1.pendingPoints } }
+    var pendingCount: Int { summaries.reduce(0) { $0 + $1.pendingCount } }
+}
+
+private struct LedgerDayDisclosureRow: View {
+    let group: LedgerDayGroup
+    let memberName: String
+    let entries: [LedgerEntry]
+    let canReview: Bool
+    let onEdit: (LedgerSummary) -> Void
+    let onReviewSummary: (LedgerSummary, ApprovalStatus) -> Void
+    let onReviewEntry: (LedgerEntry, ApprovalStatus) -> Void
+    @State private var isExpanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            ForEach(group.summaries) { summary in
+                LedgerItemDisclosureRow(
+                    summary: summary,
+                    memberName: memberName,
+                    entries: entries.filter { Set(summary.entryIDs).contains($0.id) },
+                    canReview: canReview,
+                    onEdit: { onEdit(summary) },
+                    onReviewSummary: { onReviewSummary(summary, $0) },
+                    onReviewEntry: onReviewEntry
+                )
+                .padding(.leading, 8)
+            }
+        } label: {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(memberName).font(.headline)
+                    Text(group.occurredAt.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if group.pendingCount > 0 {
+                    Label(group.pendingCount.formatted(), systemImage: "clock.fill")
+                        .font(.caption.bold())
+                        .foregroundStyle(.orange)
+                }
+                Text("\(group.activeCount) \(group.activeCount == 1 ? "item" : "items")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(signed(group.activePoints))
+                    .font(.headline)
+            }
+            .contentShape(Rectangle())
+            .accessibilityIdentifier("ledgerDay-\(memberName)-\(group.occurredAt.formatted(.dateTime.year().month().day()))")
+        }
+    }
+
+    private func signed(_ value: Int) -> String {
+        value > 0 ? "+\(value.formatted())" : value.formatted()
+    }
+}
+
+private struct LedgerItemDisclosureRow: View {
+    let summary: LedgerSummary
+    let memberName: String
+    let entries: [LedgerEntry]
+    let canReview: Bool
+    let onEdit: () -> Void
+    let onReviewSummary: (ApprovalStatus) -> Void
+    let onReviewEntry: (LedgerEntry, ApprovalStatus) -> Void
+    @State private var isExpanded = false
+
+    private var needsSubmissionBreakdown: Bool {
+        entries.count > 1 || Set(entries.map(\.submittedBy)).count > 1
+    }
+
+    var body: some View {
+        Group {
+            if needsSubmissionBreakdown {
+                DisclosureGroup(isExpanded: $isExpanded) {
+                    ForEach(entries.sorted { $0.submittedBy.localizedCaseInsensitiveCompare($1.submittedBy) == .orderedAscending }) { entry in
+                        LedgerSubmissionRow(
+                            entry: entry,
+                            canReview: canReview,
+                            onReview: { onReviewEntry(entry, $0) }
+                        )
+                        .padding(.leading, 8)
+                    }
+                } label: {
+                    itemLabel
+                }
+            } else {
+                itemLabel
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2, perform: onEdit)
+        .accessibilityAction(named: "Edit") { onEdit() }
+        .accessibilityIdentifier("ledgerSummary-\(memberName)-\(summary.title)")
+    }
+
+    private var itemLabel: some View {
+        HStack(spacing: 10) {
+            Image(systemName: summary.iconName)
+                .foregroundStyle(summary.kind == .penalty ? .red : summary.kind == .purchase ? .purple : .green)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(summary.title).fontWeight(.semibold)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if canReview && summary.hasPendingEntries {
+                Menu {
+                    Button("Approve all waiting", systemImage: "checkmark.circle.fill") {
+                        onReviewSummary(.approved)
+                    }
+                    Button("Reject all waiting", systemImage: "xmark.circle.fill", role: .destructive) {
+                        onReviewSummary(.rejected)
+                    }
+                } label: {
+                    Image(systemName: "clock.fill").foregroundStyle(.orange)
+                }
+            }
+            Text(signed(summary.approvedPoints + summary.pendingPoints))
+                .fontWeight(.semibold)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var subtitle: String {
+        let activeCount = summary.approvedCount + summary.pendingCount
+        let recorders = summary.submittedBy.isEmpty ? "Unknown recorder" : summary.submittedBy
+        return "\(activeCount) \(activeCount == 1 ? "record" : "records") • \(recorders)"
+    }
+
+    private func signed(_ value: Int) -> String {
+        value > 0 ? "+\(value.formatted())" : value.formatted()
+    }
+}
+
+private struct LedgerSubmissionRow: View {
+    let entry: LedgerEntry
+    let canReview: Bool
+    let onReview: (ApprovalStatus) -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: statusIcon)
+                .foregroundStyle(statusColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.submittedBy.isEmpty ? "Unknown recorder" : entry.submittedBy)
+                    .fontWeight(.medium)
+                HStack(spacing: 6) {
+                    Text(entry.quantity.formatted())
+                    Text((RuleMeasurementUnit(rawValue: entry.measurementUnitRawValue) ?? .occurrence).label(for: entry.quantity))
+                    if !entry.notes.isEmpty { Text("• \(entry.notes)").lineLimit(1) }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(signed(entry.points)).fontWeight(.semibold)
+            if canReview && entry.status == .pending {
+                Menu {
+                    Button("Approve this submission", systemImage: "checkmark.circle.fill") { onReview(.approved) }
+                    Button("Reject this submission", systemImage: "xmark.circle.fill", role: .destructive) { onReview(.rejected) }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
+        .padding(.vertical, 3)
+        .accessibilityIdentifier("ledgerSubmission-\(entry.id.uuidString)")
+    }
+
+    private var statusIcon: String {
+        switch entry.status {
+        case .pending: "clock.fill"
+        case .approved: "checkmark.circle.fill"
+        case .rejected: "xmark.circle.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        switch entry.status {
+        case .pending: .orange
+        case .approved: .green
+        case .rejected: .red
+        }
+    }
+
+    private func signed(_ value: Int) -> String {
+        value > 0 ? "+\(value.formatted())" : value.formatted()
+    }
+}
+
 private struct BulkCopyWeekView: View {
     let members: [FamilyMember]
     let entries: [LedgerEntry]
@@ -1470,16 +1842,27 @@ private struct BulkCopyWeekView: View {
         copyableEntries.filter { selectedEntryIDs.contains($0.id) }
     }
 
+    private var sourceWeekEndings: [Date] {
+        (1...260).compactMap { offset in
+            Calendar.current.date(
+                byAdding: .day,
+                value: offset * -7,
+                to: currentWeekEnding
+            )
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
                 Section("Copy from") {
-                    DatePicker(
-                        "Week ending",
-                        selection: $sourceWeekEnding,
-                        in: ...PointsEngine.previousWeekEnding(before: currentWeekEnding),
-                        displayedComponents: .date
-                    )
+                    Picker("Week ending", selection: $sourceWeekEnding) {
+                        ForEach(sourceWeekEndings, id: \.self) { weekEnding in
+                            Text(weekEnding.formatted(date: .abbreviated, time: .omitted))
+                                .tag(weekEnding)
+                        }
+                    }
+                    .pickerStyle(.menu)
                     .accessibilityIdentifier("copySourceWeek")
                     Text("Approved rewards and fines are copied to the same weekdays in the current week ending \(currentWeekEnding.formatted(date: .abbreviated, time: .omitted)).")
                         .font(.caption)
@@ -1547,12 +1930,7 @@ private struct BulkCopyWeekView: View {
             }
             .onAppear(perform: selectAll)
             .onChange(of: sourceWeekEnding) {
-                let normalized = PointsEngine.weekEnding(containing: sourceWeekEnding)
-                if !Calendar.current.isDate(normalized, inSameDayAs: sourceWeekEnding) {
-                    sourceWeekEnding = normalized
-                } else {
-                    selectAll()
-                }
+                selectAll()
             }
         }
     }
@@ -2050,7 +2428,7 @@ private struct MemberEditorView: View {
 #endif
     @FocusState private var focusedField: Field?
 #if canImport(ContactsUI) && canImport(UIKit)
-    @State private var showingContactPicker = false
+    @State private var contactPickerPurpose: ContactPickerPurpose?
     @State private var contactImportMessage: String?
 #endif
 
@@ -2062,6 +2440,15 @@ private struct MemberEditorView: View {
         case birthday
         case removeBirthday
     }
+
+#if canImport(ContactsUI) && canImport(UIKit)
+    private enum ContactPickerPurpose: String, Identifiable {
+        case profile
+        case avatar
+
+        var id: Self { self }
+    }
+#endif
 
     init(
         title: String,
@@ -2094,7 +2481,7 @@ private struct MemberEditorView: View {
                 if isAddingMember {
                     Section {
                         Button {
-                            showingContactPicker = true
+                            contactPickerPurpose = .profile
                         } label: {
                             Label("Choose from Contacts", systemImage: "person.crop.circle.badge.plus")
                         }
@@ -2114,38 +2501,67 @@ private struct MemberEditorView: View {
                 Section {
                     HStack {
                         Spacer()
-                        MemberAvatarView(
-                            avatarData: draft.avatarData,
-                            name: draft.name,
-                            role: draft.role,
-                            size: 104
-                        )
+                        Menu {
+#if canImport(PhotosUI)
+                            PhotosPicker(selection: $selectedAvatarItem, matching: .images) {
+                                Label("Choose from Photos", systemImage: "photo.badge.plus")
+                            }
+#endif
+#if canImport(ContactsUI) && canImport(UIKit)
+                            Button {
+                                contactPickerPurpose = .avatar
+                            } label: {
+                                Label("Choose Contact Photo", systemImage: "person.crop.circle.badge.plus")
+                            }
+#endif
+#if canImport(ImagePlayground) && canImport(UIKit)
+                            if #available(iOS 26.0, *) {
+                                GenmojiAvatarButton(concept: genmojiConcept) { data in
+                                    if let normalizedData = normalizedAvatarData(data) {
+                                        draft.avatarData = normalizedData
+#if canImport(PhotosUI)
+                                        selectedAvatarItem = nil
+#endif
+                                    } else {
+                                        validationMessage = "The selected Genmoji could not be used as an avatar."
+                                    }
+                                }
+                            }
+#endif
+                            if draft.avatarData != nil {
+                                Divider()
+                                Button("Remove Avatar", systemImage: "trash", role: .destructive) {
+                                    draft.avatarData = nil
+#if canImport(PhotosUI)
+                                    selectedAvatarItem = nil
+#endif
+                                }
+                            }
+                        } label: {
+                            ZStack(alignment: .bottom) {
+                                MemberAvatarView(
+                                    avatarData: draft.avatarData,
+                                    name: draft.name,
+                                    role: draft.role,
+                                    size: 112
+                                )
+                                Text("Edit")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 5)
+                                    .background(.black.opacity(0.68), in: Capsule())
+                                    .offset(y: 8)
+                            }
+                            .padding(.bottom, 8)
+                            .contentShape(Circle())
+                            .hoverEffect(.lift)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Edit avatar")
+                        .accessibilityIdentifier("chooseMemberAvatar")
                         Spacer()
                     }
-#if canImport(PhotosUI)
-                    PhotosPicker(selection: $selectedAvatarItem, matching: .images) {
-                        Label(
-                            draft.avatarData == nil ? "Choose Avatar" : "Change Avatar",
-                            systemImage: "photo.badge.plus"
-                        )
-                    }
-                    .accessibilityIdentifier("chooseMemberAvatar")
-#endif
-                    if draft.avatarData != nil {
-                        Button("Remove Avatar", role: .destructive) {
-                            draft.avatarData = nil
-#if canImport(PhotosUI)
-                            selectedAvatarItem = nil
-#endif
-                        }
-                    }
-                } header: {
-                    Text("Avatar")
-                } footer: {
-                    Text("Choose a photo, Memoji, or other image. Initials are shown until an avatar is selected.")
-                }
-
-                Section {
                     TextField("Name", text: $draft.name)
                         .focused($focusedField, equals: .name)
                         .submitLabel(.next)
@@ -2229,7 +2645,7 @@ private struct MemberEditorView: View {
                 } header: {
                     Text("Profile")
                 } footer: {
-                    Text("A birthdate is required for children because starting points are calculated from age. It is optional for parents and caregivers.")
+                    Text("Select Edit on the avatar to choose a photo, import a contact image, or create a Genmoji on a supported device. A birthdate is required for children because starting points are calculated from age; it is optional for adults.")
                 }
 
                 if let validationMessage {
@@ -2251,7 +2667,12 @@ private struct MemberEditorView: View {
             .task(id: selectedAvatarItem) {
                 guard let selectedAvatarItem,
                       let data = try? await selectedAvatarItem.loadTransferable(type: Data.self) else { return }
-                draft.avatarData = normalizedAvatarData(data)
+                guard let normalizedData = normalizedAvatarData(data) else {
+                    validationMessage = "The selected image could not be used as an avatar."
+                    return
+                }
+                draft.avatarData = normalizedData
+                validationMessage = nil
             }
 #endif
             .toolbar {
@@ -2264,12 +2685,17 @@ private struct MemberEditorView: View {
             }
         }
 #if canImport(ContactsUI) && canImport(UIKit)
-        .sheet(isPresented: $showingContactPicker) {
+        .sheet(item: $contactPickerPurpose) { purpose in
             FamilyMemberContactPicker { contact in
-                importContact(contact)
-                showingContactPicker = false
+                switch purpose {
+                case .profile:
+                    importContact(contact)
+                case .avatar:
+                    importContactPhoto(contact)
+                }
+                contactPickerPurpose = nil
             } onCancel: {
-                showingContactPicker = false
+                contactPickerPurpose = nil
             }
         }
 #endif
@@ -2287,6 +2713,25 @@ private struct MemberEditorView: View {
             ? contact.emailAddresses.first.map { $0.value as String } ?? ""
             : ""
 
+        let contactImageData: Data?
+        if contact.isKeyAvailable(CNContactThumbnailImageDataKey), let data = contact.thumbnailImageData {
+            contactImageData = data
+        } else if contact.isKeyAvailable(CNContactImageDataKey), let data = contact.imageData {
+            contactImageData = data
+        } else {
+            contactImageData = nil
+        }
+        let importedContactPhoto: Bool
+        if let contactImageData, let normalizedData = normalizedAvatarData(contactImageData) {
+            draft.avatarData = normalizedData
+            importedContactPhoto = true
+#if canImport(PhotosUI)
+            selectedAvatarItem = nil
+#endif
+        } else {
+            importedContactPhoto = false
+        }
+
         let birthdayComponents: DateComponents?
         if contact.isKeyAvailable(CNContactBirthdayKey), let birthday = contact.birthday {
             birthdayComponents = birthday
@@ -2303,10 +2748,32 @@ private struct MemberEditorView: View {
             draft.role = ContactBirthdayConverter.isAdult(birthDate) ? .caregiver : .child
         }
         validationMessage = nil
+        let importedPhoto = importedContactPhoto ? " The contact photo was also imported." : ""
         contactImportMessage = draft.birthDate == nil
-            ? "No full birthdate was available. Enter one for a child; it is optional for adults."
-            : "Contact details imported. Review them and choose the member’s role before saving."
+            ? "No full birthdate was available. Enter one for a child; it is optional for adults.\(importedPhoto)"
+            : "Contact details imported.\(importedPhoto) Review them and choose the member’s role before saving."
         focusedField = .role
+    }
+
+    private func importContactPhoto(_ contact: CNContact) {
+        let imageData: Data?
+        if contact.isKeyAvailable(CNContactThumbnailImageDataKey), let data = contact.thumbnailImageData {
+            imageData = data
+        } else if contact.isKeyAvailable(CNContactImageDataKey), let data = contact.imageData {
+            imageData = data
+        } else {
+            imageData = nil
+        }
+
+        guard let imageData, let normalizedData = normalizedAvatarData(imageData) else {
+            validationMessage = "That contact does not have a usable photo."
+            return
+        }
+        draft.avatarData = normalizedData
+        validationMessage = nil
+#if canImport(PhotosUI)
+        selectedAvatarItem = nil
+#endif
     }
 #endif
 
@@ -2359,22 +2826,72 @@ private struct MemberEditorView: View {
         )
     }
 
+    private var genmojiConcept: String {
+        let trimmedName = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedName.isEmpty ? "A friendly family member" : "A friendly avatar for \(trimmedName)"
+    }
+
     private func normalizedAvatarData(_ data: Data) -> Data? {
         #if canImport(UIKit)
         guard let image = UIImage(data: data) else { return nil }
         let maximumDimension: CGFloat = 512
-        let scale = min(1, maximumDimension / max(image.size.width, image.size.height))
-        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: size)
+        guard image.size.width > 0, image.size.height > 0 else { return nil }
+        let side = min(image.size.width, image.size.height)
+        let outputSide = min(maximumDimension, side)
+        let outputSize = CGSize(width: outputSide, height: outputSide)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: outputSize, format: format)
         let resized = renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: size))
+            let scale = max(outputSide / image.size.width, outputSide / image.size.height)
+            let drawSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            image.draw(in: CGRect(
+                x: (outputSide - drawSize.width) / 2,
+                y: (outputSide - drawSize.height) / 2,
+                width: drawSize.width,
+                height: drawSize.height
+            ))
         }
-        return resized.jpegData(compressionQuality: 0.82)
+        return resized.pngData()
         #else
         return data
         #endif
     }
 }
+
+#if canImport(ImagePlayground) && canImport(UIKit)
+@available(iOS 26.0, *)
+private struct GenmojiAvatarButton: View {
+    let concept: String
+    let onSelect: (Data) -> Void
+    @Environment(\.supportsImagePlayground) private var supportsImagePlayground
+    @State private var showingImagePlayground = false
+
+    var body: some View {
+        if supportsImagePlayground {
+            Button {
+                showingImagePlayground = true
+            } label: {
+                Label("Create Genmoji", systemImage: "wand.and.sparkles")
+            }
+            .imagePlaygroundSheet(
+                isPresented: $showingImagePlayground,
+                concept: concept,
+                onCompletion: { url in
+                    if let data = try? Data(contentsOf: url) {
+                        onSelect(data)
+                    }
+                },
+                onAdaptiveImageGlyphCreation: { glyph in
+                    onSelect(glyph.imageContent)
+                }
+            )
+            .imagePlaygroundGenerationStyle(.emoji, in: [.emoji])
+        }
+    }
+}
+#endif
 
 private struct MemberAvatarView: View {
     let avatarData: Data?
@@ -2566,7 +3083,6 @@ private struct BirthdayInputField: UIViewRepresentable {
         picker.datePickerMode = .date
         picker.preferredDatePickerStyle = .wheels
         picker.maximumDate = .now
-        picker.addTarget(context.coordinator, action: #selector(Coordinator.dateChanged(_:)), for: .valueChanged)
         textField.inputView = picker
         context.coordinator.picker = picker
 
@@ -2626,10 +3142,6 @@ private struct BirthdayInputField: UIViewRepresentable {
             guard parent.birthDate == nil else { return }
             let date = Calendar.current.date(byAdding: .year, value: -parent.defaultAge, to: .now) ?? .now
             picker?.date = date
-        }
-
-        @objc func dateChanged(_ sender: UIDatePicker) {
-            parent.birthDate = sender.date
         }
 
         @objc func useSelectedDate() {
@@ -2726,7 +3238,8 @@ private struct FamilyMemberContactPicker: UIViewControllerRepresentable {
             picker.displayedPropertyKeys = [
                 CNContactEmailAddressesKey,
                 CNContactBirthdayKey,
-                CNContactNonGregorianBirthdayKey
+                CNContactNonGregorianBirthdayKey,
+                CNContactImageDataAvailableKey
             ]
             picker.modalPresentationStyle = .fullScreen
             present(picker, animated: true)
@@ -2740,8 +3253,10 @@ private struct FamilyMemberContactPicker: UIViewControllerRepresentable {
         }
 
         private func loadSelectedContactDetails(for pickerContact: CNContact) {
-            if pickerContact.isKeyAvailable(CNContactBirthdayKey) ||
-                pickerContact.isKeyAvailable(CNContactNonGregorianBirthdayKey) {
+            if (pickerContact.isKeyAvailable(CNContactBirthdayKey) ||
+                pickerContact.isKeyAvailable(CNContactNonGregorianBirthdayKey)) &&
+                (pickerContact.isKeyAvailable(CNContactThumbnailImageDataKey) ||
+                pickerContact.isKeyAvailable(CNContactImageDataKey)) {
                 onSelect(pickerContact)
                 return
             }
@@ -2774,7 +3289,10 @@ private struct FamilyMemberContactPicker: UIViewControllerRepresentable {
                 CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
                 CNContactEmailAddressesKey as CNKeyDescriptor,
                 CNContactBirthdayKey as CNKeyDescriptor,
-                CNContactNonGregorianBirthdayKey as CNKeyDescriptor
+                CNContactNonGregorianBirthdayKey as CNKeyDescriptor,
+                CNContactImageDataAvailableKey as CNKeyDescriptor,
+                CNContactThumbnailImageDataKey as CNKeyDescriptor,
+                CNContactImageDataKey as CNKeyDescriptor
             ]
 
             do {
@@ -2858,6 +3376,7 @@ enum ContactBirthdayConverter {
         ManageFamilyView()
             .environment(AppleIDManager())
             .environment(ReportingPeriod())
+            .environment(SoundscapeDirector())
             .modelContainer(for: [
                 AllowanceFamily.self,
                 FamilyInvitation.self,

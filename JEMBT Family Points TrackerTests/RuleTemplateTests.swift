@@ -81,6 +81,41 @@ final class RuleTemplateTests: XCTestCase {
         XCTAssertEqual(timedReward.incrementalPoints(existingQuantity: 15), 100)
     }
 
+    func testWeeklyParentAssignmentsAdvanceGrowthAndRespectMaximum() {
+        let growingReward = makeRule(
+            points: 50,
+            maximum: 3,
+            growthKind: .percentage,
+            growthAmount: 100
+        )
+
+        XCTAssertEqual(
+            growingReward.incrementalPointAllocations(
+                existingQuantities: [0, 0, 0, 0],
+                additionalQuantity: 1
+            ),
+            [50, 100, 200, 0]
+        )
+    }
+
+    func testDailyParentAssignmentsCalculateEachSelectedDateIndependently() {
+        let dailyReward = makeRule(
+            points: 50,
+            maximum: 2,
+            maximumPeriod: .daily,
+            growthKind: .percentage,
+            growthAmount: 100
+        )
+
+        XCTAssertEqual(
+            dailyReward.incrementalPointAllocations(
+                existingQuantities: [0, 1, 2],
+                additionalQuantity: 1
+            ),
+            [50, 100, 0]
+        )
+    }
+
     func testVariableEntryDefaultsToFirstPayableQuantity() {
         let reading = makeRule(
             points: 1,
@@ -133,6 +168,40 @@ final class RuleTemplateTests: XCTestCase {
         XCTAssertFalse(MemberRole.caregiver.participatesInPoints)
     }
 
+    func testDefaultCatalogContainsOnlyTheCuratedFamilyItems() {
+        let rules = SeedData.defaultRules(for: UUID())
+        let earn = Set(rules.filter { $0.catalog == .incentives }.map(\.title))
+        let lose = Set(rules.filter { $0.catalog == .disincentives }.map(\.title))
+        let store = Set(rules.filter { $0.catalog == .tradingPost }.map(\.title))
+
+        XCTAssertEqual(earn, [
+            "Wash the dishes", "Make your bed", "Clean your room",
+            "Help with laundry", "Rake the leaves", "Wash the car"
+        ])
+        XCTAssertEqual(lose, [
+            "Swearing", "Name calling", "Unapproved device use", "School misbehavior"
+        ])
+        XCTAssertEqual(store, [
+            "Extra 15 minutes of screen time", "Extra sweet",
+            "Stay up late", "Pick game for Family Game Night"
+        ])
+        XCTAssertEqual(rules.count, 14)
+
+        let makeBed = rules.first { $0.title == "Make your bed" }
+        XCTAssertEqual(makeBed?.measurementUnit, .day)
+        XCTAssertEqual(makeBed?.minimumTarget, 4)
+        XCTAssertEqual(makeBed?.maximumTarget, 7)
+
+        let cleanRoom = rules.first { $0.title == "Clean your room" }
+        XCTAssertEqual(cleanRoom?.countSchedule, .once)
+        XCTAssertEqual(cleanRoom?.maximumTarget, 1)
+
+        XCTAssertEqual(
+            rules.first { $0.title == "Help with laundry" }?.measurementUnit,
+            .basket
+        )
+    }
+
     private func makeRule(
         points: Int,
         kind: EntryKind = .reward,
@@ -140,6 +209,7 @@ final class RuleTemplateTests: XCTestCase {
         maximum: Double? = nil,
         warnings: Int = 0,
         accelerator: Bool = false,
+        maximumPeriod: RuleMaximumPeriod = .weekly,
         frequencyKind: RuleFrequencyKind = .count,
         countSchedule: RuleCountSchedule = .every,
         frequencyValue: Double = 1,
@@ -154,6 +224,7 @@ final class RuleTemplateTests: XCTestCase {
             defaultPoints: points,
             minimumTarget: minimum,
             maximumTarget: maximum,
+            maximumPeriod: maximumPeriod,
             warningUnits: warnings,
             acceleratorEnabled: accelerator,
             acceleratorStartsAt: 2,

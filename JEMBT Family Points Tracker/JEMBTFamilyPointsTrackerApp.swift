@@ -5,6 +5,7 @@ import SwiftUI
 struct JEMBTFamilyPointsTrackerApp: App {
     private let modelContainer: ModelContainer
     @State private var appleIDManager = AppleIDManager()
+    @State private var soundscape = SoundscapeDirector()
 
     init() {
         do {
@@ -39,6 +40,7 @@ struct JEMBTFamilyPointsTrackerApp: App {
             if appleIDManager.isSignedIn, appleIDManager.currentFamily != nil {
                 ContentView()
                     .environment(appleIDManager)
+                    .environment(soundscape)
             } else {
                 SignInWithAppleView()
                     .environment(appleIDManager)

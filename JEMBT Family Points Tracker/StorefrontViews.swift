@@ -96,6 +96,7 @@ enum StorefrontEngine {
 
 struct FamilyStorefrontView: View {
     @Environment(AppleIDManager.self) private var appleIDManager
+    @Environment(SoundscapeDirector.self) private var soundscape
     @Environment(\.modelContext) private var modelContext
     @Query private var allMembers: [FamilyMember]
     @Query private var allRules: [RuleTemplate]
@@ -216,22 +217,9 @@ struct FamilyStorefrontView: View {
                     }
                 }
                 .padding()
-                .background(StoreInteriorBackground())
             }
-            .clipShape(RoundedRectangle(cornerRadius: 22))
-            .overlay {
-                RoundedRectangle(cornerRadius: 22)
-                    .stroke(Color.brown.opacity(0.35), lineWidth: 2)
-            }
-            .padding()
         }
-        .background(
-            LinearGradient(
-                colors: [Color.orange.opacity(0.12), Color.brown.opacity(0.08)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
+        .background { StoreInteriorBackground().ignoresSafeArea() }
         .navigationTitle(storeName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -279,6 +267,8 @@ struct FamilyStorefrontView: View {
         } message: {
             Text(errorMessage ?? purchaseMessage ?? "")
         }
+        .onAppear { soundscape.activate(.storefront) }
+        .onDisappear { soundscape.deactivate(.storefront) }
     }
 
     private var storeSign: some View {
@@ -412,6 +402,7 @@ struct FamilyStorefrontView: View {
             let count = cartCount
             cartQuantities.removeAll()
             purchaseMessage = "You bought \(count) item\(count == 1 ? "" : "s")!"
+            soundscape.play(.purchaseComplete)
             return nil
         } catch {
             modelContext.rollback()
@@ -447,8 +438,10 @@ struct FamilyStorefrontView: View {
         target.countSchedule = draft.countSchedule
         target.frequencyValue = Double(draft.frequencyCount)
         target.timeUnit = draft.timeUnit
+        target.measurementUnit = draft.effectiveMeasurementUnit
         target.minimumTarget = Double(draft.firstAward)
         target.maximumTarget = draft.hasLastAward ? Double(draft.lastAward) : nil
+        target.maximumPeriod = draft.maximumPeriod
         target.growthEnabled = draft.growthEnabled
         target.growthKind = draft.growthKind
         target.growthAmount = draft.growthAmount
