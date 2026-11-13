@@ -267,8 +267,6 @@ struct FamilyStorefrontView: View {
         } message: {
             Text(errorMessage ?? purchaseMessage ?? "")
         }
-        .onAppear { soundscape.activate(.storefront) }
-        .onDisappear { soundscape.deactivate(.storefront) }
     }
 
     private var storeSign: some View {

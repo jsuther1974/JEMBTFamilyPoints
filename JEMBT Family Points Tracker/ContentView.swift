@@ -26,6 +26,7 @@ struct ContentView: View {
     @State private var reportingPeriod = ReportingPeriod()
     @State private var observedPointTotal: Int?
     @State private var pointChangeNotice: PointChangeNotice?
+    @State private var soundscapeOwner = UUID()
     
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -107,6 +108,11 @@ struct ContentView: View {
         }
         .onAppear {
             observedPointTotal = currentUserPointTotal
+            soundscape.enter(soundscapeScene, owner: soundscapeOwner)
+        }
+        .onDisappear { soundscape.leave(owner: soundscapeOwner) }
+        .onChange(of: selectedTab) {
+            soundscape.enter(soundscapeScene, owner: soundscapeOwner)
         }
         .onChange(of: currentUserPointTotal) { _, newTotal in
             showPointChange(from: observedPointTotal, to: newTotal)
@@ -122,6 +128,16 @@ struct ContentView: View {
                 $0.kind != .purchase
             }
             .reduce(0) { $0 + $1.points }
+    }
+
+    private var soundscapeScene: SoundscapeDirector.Scene {
+        switch selectedTab {
+        case "storefront": .storefront
+        case "rules": .rules
+        case "ledger": .ledger
+        case "statistics": .statistics
+        default: .family
+        }
     }
 
     private func showPointChange(from oldTotal: Int?, to newTotal: Int) {

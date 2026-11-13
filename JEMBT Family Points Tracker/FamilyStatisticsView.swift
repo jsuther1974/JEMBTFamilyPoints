@@ -4,7 +4,6 @@ import SwiftUI
 
 struct FamilyStatisticsView: View {
     @Environment(AppleIDManager.self) private var appleIDManager
-    @Environment(SoundscapeDirector.self) private var soundscape
     @Query private var members: [FamilyMember]
     @Query private var entries: [LedgerEntry]
     @State private var selectedAge = 0
@@ -83,9 +82,7 @@ struct FamilyStatisticsView: View {
         .accessibilityIdentifier("familyStatisticsPage")
         .onAppear {
             selectInitialAge()
-            soundscape.activate(.statistics)
         }
-        .onDisappear { soundscape.deactivate(.statistics) }
         .onChange(of: availableAges) { selectInitialAge() }
     }
 

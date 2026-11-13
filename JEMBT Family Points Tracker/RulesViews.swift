@@ -333,6 +333,7 @@ struct RuleEditorView: View {
     @State private var draft: RuleDraft
     @State private var validationMessage: String?
     @State private var showingIconPicker = false
+    @State private var soundscapeOwner = UUID()
 
     init(
         catalog: RuleCatalog,
@@ -565,11 +566,14 @@ struct RuleEditorView: View {
             }
             .onAppear {
                 guard catalog != .tradingPost else { return }
-                soundscape.activate(catalog == .incentives ? .rewardEntry : .penaltyEntry)
+                soundscape.enter(
+                    catalog == .incentives ? .rewardEntry : .penaltyEntry,
+                    owner: soundscapeOwner
+                )
             }
             .onDisappear {
                 guard catalog != .tradingPost else { return }
-                soundscape.deactivate(catalog == .incentives ? .rewardEntry : .penaltyEntry)
+                soundscape.leave(owner: soundscapeOwner)
             }
         }
     }
