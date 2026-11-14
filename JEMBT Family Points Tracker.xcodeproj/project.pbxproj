@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 110;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -62,7 +62,7 @@
 		94A7C00030A7C8830072F87F /* Embed Watch Content */ = {
 			isa = PBXCopyFilesBuildPhase;
 			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
-			dstSubfolder = Product;
+			dstSubfolderSpec = 16;
 			files = (
 				94A7BFDC30A7C8820072F87F /* Family Points Watch App Watch App.app in Embed Watch Content */,
 			);

@@ -27,8 +27,8 @@ jobs:
     #   - https://gh.io/supported-runners-and-hardware-resources
     #   - https://gh.io/using-larger-runners (GitHub.com only)
     # Consider using larger runners or machines with greater resources for possible analysis time improvements.
-    # Avoid the CodeQL preload_tracer crash on the ARM64 macos-latest image.
-    runs-on: ${{ (matrix.language == 'swift' && 'macos-26-intel') || 'ubuntu-latest' }}
+    # CodeQL's preload_tracer also crashes on macos-26-intel before compilation.
+    runs-on: ${{ (matrix.language == 'swift' && 'macos-15-intel') || 'ubuntu-latest' }}
     permissions:
       # required for all workflows
       security-events: write
@@ -45,7 +45,7 @@ jobs:
       matrix:
         include:
         - language: swift
-          build-mode: autobuild
+          build-mode: manual
         # CodeQL supports the following values keywords for 'language': 'actions', 'c-cpp', 'csharp', 'go', 'java-kotlin', 'javascript-typescript', 'python', 'ruby', 'rust', 'swift'
         # Use `c-cpp` to analyze code written in C, C++ or both
         # Use 'java-kotlin' to analyze code written in Java, Kotlin or both
@@ -58,11 +58,15 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v7
 
-    # Add any setup steps before running the `github/codeql-action/init` action.
-    # This includes steps like installing compilers or runtimes (`actions/setup-node`
-    # or others). This is typically only required for manual builds.
-    # - name: Setup runtime (example)
-    #   uses: actions/setup-example@v1
+    # Xcode 27 / Swift 6.4 cannot be traced by CodeQL.
+    - name: Select Xcode
+      if: matrix.language == 'swift'
+      env:
+        DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      run: |
+        echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+        xcodebuild -version
+        xcrun swift --version
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
@@ -77,22 +81,21 @@ jobs:
         # For more details on CodeQL's query packs, refer to: https://docs.github.com/en/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-code-scanning#using-queries-in-ql-packs
         # queries: security-extended,security-and-quality
 
-    # If the analyze step fails for one of the languages you are analyzing with
-    # "We were unable to automatically build your code", modify the matrix above
-    # to set the build mode to "manual" for that language. Then modify this step
-    # to build your code.
-    # ℹ️ Command-line programs to run using the OS shell.
-    # 📚 See https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idstepsrun
-    - name: Run manual build steps
+    # Override deployment targets only for analysis with the installed 26.2 SDKs.
+    - name: Build iOS and embedded watchOS apps
       if: matrix.build-mode == 'manual'
       shell: bash
       run: |
-        echo 'If you are using a "manual" build mode for one or more of the' \
-          'languages you are analyzing, replace this with the commands to build' \
-          'your code, for example:'
-        echo '  make bootstrap'
-        echo '  make release'
-        exit 1
+        xcodebuild \
+          -project "JEMBT Family Points Tracker.xcodeproj" \
+          -scheme "JEMBT Family Points Tracker" \
+          -configuration Debug \
+          -destination 'generic/platform=iOS Simulator' \
+          -derivedDataPath "$RUNNER_TEMP/codeql-derived-data" \
+          CODE_SIGNING_ALLOWED=NO \
+          IPHONEOS_DEPLOYMENT_TARGET=26.2 \
+          WATCHOS_DEPLOYMENT_TARGET=26.2 \
+          clean build
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4
