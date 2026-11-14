@@ -55,6 +55,7 @@ struct ContentView: View {
             .tag("family")
         }
         .environment(reportingPeriod)
+        .background { WatchSnapshotSyncView() }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

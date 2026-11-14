@@ -310,6 +310,47 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
     }
 
     @MainActor
+    func testRegularWidthAddMemberControlsRemainInteractiveAfterTextEntry() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-ipad-member-controls-\(UUID().uuidString)@local"
+        app.launch()
+
+        try XCTSkipUnless(
+            app.windows.firstMatch.frame.width >= 700,
+            "This regression covers the regular-width iPad member editor."
+        )
+
+        app.signInAndCreateFamilyForAddingMembers()
+        app.openFamilyTab()
+        app.openAddMemberEditor()
+
+        let nameField = app.textFields["Name"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        nameField.tap()
+        nameField.typeText("iPad Member")
+
+        let rolePicker = app.descendants(matching: .any)["memberRolePicker"]
+        XCTAssertTrue(rolePicker.waitForExistence(timeout: 5), "Expected the native iPad role picker.")
+        rolePicker.tap()
+        let parentRole = app.buttons["Parent"]
+        XCTAssertTrue(parentRole.waitForExistence(timeout: 3), "Expected role choices to open after entering text.")
+        parentRole.tap()
+
+        let addBirthday = app.descendants(matching: .any)["addMemberBirthdate"]
+        XCTAssertTrue(addBirthday.waitForExistence(timeout: 3), "Expected the optional birthday control to remain reachable.")
+        addBirthday.tap()
+
+        let birthdayPicker = app.descendants(matching: .any)["memberBirthdatePicker"]
+        XCTAssertTrue(birthdayPicker.waitForExistence(timeout: 3), "Expected the native date picker after adding a birthday.")
+        let clearBirthday = app.buttons["Clear optional birthday"]
+        XCTAssertTrue(clearBirthday.waitForExistence(timeout: 3))
+        clearBirthday.tap()
+
+        app.navigationBars["Add Family Member"].buttons["Save"].tap()
+        app.assertInviteReadySheetIsVisible()
+    }
+
+    @MainActor
     func testCaregiverCardDoesNotShowPoints() throws {
         let app = XCUIApplication()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-caregiver-card-\(UUID().uuidString)@local"

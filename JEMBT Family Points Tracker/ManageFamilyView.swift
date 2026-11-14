@@ -2579,29 +2579,66 @@ private struct MemberEditorView: View {
                         }
 
                     #if canImport(UIKit)
-                    LabeledContent("Role") {
-                        RoleInputField(
-                            role: $draft.role,
-                            isFocused: focusBinding(for: .role),
-                            onNext: { focusedField = .birthday },
-                            onPrevious: { focusedField = .emailAddress }
-                        )
-                        .frame(width: 180, height: 32)
-                    }
+                    if UIDevice.current.userInterfaceIdiom == .pad {
+                        LabeledContent("Role") {
+                            Picker("Role", selection: $draft.role) {
+                                Text("Child").tag(MemberRole.child)
+                                Text("Parent").tag(MemberRole.parent)
+                                Text("Caregiver").tag(MemberRole.caregiver)
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .accessibilityIdentifier("memberRolePicker")
+                        }
 
-                    LabeledContent(draft.role == .child ? "Birthdate" : "Birthday (optional)") {
-                        BirthdayInputField(
-                            birthDate: $draft.birthDate,
-                            defaultAge: draft.role == .child ? 10 : 30,
-                            isFocused: focusBinding(for: .birthday),
-                            onNext: {
-                                focusedField = draft.role != .child && draft.birthDate != nil
-                                    ? .removeBirthday
-                                    : nil
-                            },
-                            onPrevious: { focusedField = .role }
-                        )
-                        .frame(width: 180, height: 32)
+                        LabeledContent(draft.role == .child ? "Birthdate" : "Birthday (optional)") {
+                            if draft.birthDate != nil {
+                                DatePicker(
+                                    "Birthdate",
+                                    selection: birthDateBinding,
+                                    in: ...Date.now,
+                                    displayedComponents: .date
+                                )
+                                .labelsHidden()
+                                .datePickerStyle(.compact)
+                                .accessibilityIdentifier("memberBirthdatePicker")
+                            } else {
+                                Button(draft.role == .child ? "Enter birthdate" : "Add birthday") {
+                                    focusedField = nil
+                                    draft.birthDate = Calendar.current.date(
+                                        byAdding: .year,
+                                        value: draft.role == .child ? -10 : -30,
+                                        to: .now
+                                    ) ?? .now
+                                }
+                                .accessibilityIdentifier("addMemberBirthdate")
+                            }
+                        }
+                    } else {
+                        LabeledContent("Role") {
+                            RoleInputField(
+                                role: $draft.role,
+                                isFocused: focusBinding(for: .role),
+                                onNext: { focusedField = .birthday },
+                                onPrevious: { focusedField = .emailAddress }
+                            )
+                            .frame(width: 180, height: 32)
+                        }
+
+                        LabeledContent(draft.role == .child ? "Birthdate" : "Birthday (optional)") {
+                            BirthdayInputField(
+                                birthDate: $draft.birthDate,
+                                defaultAge: draft.role == .child ? 10 : 30,
+                                isFocused: focusBinding(for: .birthday),
+                                onNext: {
+                                    focusedField = draft.role != .child && draft.birthDate != nil
+                                        ? .removeBirthday
+                                        : nil
+                                },
+                                onPrevious: { focusedField = .role }
+                            )
+                            .frame(width: 180, height: 32)
+                        }
                     }
                     if draft.role != .child, draft.birthDate != nil {
                         Button("Clear optional birthday") {
@@ -2655,6 +2692,7 @@ private struct MemberEditorView: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .defaultFocus($focusedField, .name)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
