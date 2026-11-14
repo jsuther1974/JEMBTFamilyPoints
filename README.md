@@ -49,12 +49,16 @@ records across separate family Apple IDs.
 
 ## CodeQL analysis
 
-The CodeQL workflow uses the `xcode-27` macOS runner and selects Xcode 27.2
-to match the Watch app's watchOS 27.2 deployment target. It uses a manual,
-unsigned Debug build for the generic iOS Simulator instead of Swift autobuild.
-The shared `JEMBT Family Points Tracker` scheme also builds its Watch app
-dependency, so both apps are included in the analysis. Signing is disabled only
-for this CI build; the project's signing and deployment settings are unchanged.
+The CodeQL workflow uses `macos-15-intel`, pins Xcode 26.3, and manually builds
+the shared `JEMBT Family Points Tracker` scheme for a generic iOS Simulator,
+including its embedded watchOS app. This avoids the `preload_tracer` crash
+observed on `macos-26-intel`; Xcode 27 / Swift 6.4 are not supported by CodeQL
+traced extraction either.
+
+The project uses the Xcode 16-compatible project format so the pinned toolchain
+can open it. Analysis disables signing and overrides the iOS and watchOS
+deployment targets to 26.2 to match the installed SDKs. These overrides apply
+only to the CI build and do not change the app's shipping deployment settings.
 
 ## Rule catalog notes
 
