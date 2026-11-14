@@ -47,6 +47,15 @@ records across separate family Apple IDs.
 8. Run first with CloudKit disabled or `.none` if the development container is
    not yet configured.
 
+## CodeQL analysis
+
+The CodeQL workflow uses the `xcode-27` macOS runner and selects Xcode 27.2
+to match the Watch app's watchOS 27.2 deployment target. It uses a manual,
+unsigned Debug build for the generic iOS Simulator instead of Swift autobuild.
+The shared `JEMBT Family Points Tracker` scheme also builds its Watch app
+dependency, so both apps are included in the analysis. Signing is disabled only
+for this CI build; the project's signing and deployment settings are unchanged.
+
 ## Rule catalog notes
 
 The Word document contains rules whose final value depends on weekly counts,
