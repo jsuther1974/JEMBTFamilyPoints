@@ -499,21 +499,22 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         let dayRows = app.descendants(matching: .any).matching(
             NSPredicate(format: "identifier BEGINSWITH %@", "ledgerDay-Mateo-")
         )
-        XCTAssertGreaterThanOrEqual(dayRows.count, 2, "Expected one collapsed row for each active day.")
+        let dayRowCount = dayRows.count
+        XCTAssertGreaterThanOrEqual(dayRowCount, 2, "Expected one collapsed row for each active day.")
         let dishesRows = app.descendants(matching: .any).matching(identifier: "ledgerSummary-Mateo-Wash the dishes")
-        for index in 0..<dayRows.count where dishesRows.count < 2 {
+        for index in 0..<dayRowCount {
             let dayRow = dayRows.element(boundBy: index)
             XCTAssertTrue(dayRow.waitForExistence(timeout: 5))
             dayRow.tap()
-            _ = dishesRows.element(boundBy: 1).waitForExistence(timeout: 1)
         }
 
         XCTAssertGreaterThanOrEqual(dishesRows.count, 2)
-        XCTAssertTrue(app.descendants(matching: .any)["ledgerSummary-Mateo-Help with laundry"].waitForExistence(timeout: 5))
+        let laundrySummary = app.descendants(matching: .any)["ledgerSummary-Mateo-Help with laundry"]
+        XCTAssertTrue(laundrySummary.waitForExistence(timeout: 5))
 
-        dishesRows.firstMatch.doubleTap()
+        laundrySummary.doubleTap()
         XCTAssertTrue(app.navigationBars["Edit Ledger Item"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Wash the dishes"].exists)
+        XCTAssertTrue(app.staticTexts["Help with laundry"].exists)
         XCTAssertTrue(app.staticTexts["Mateo"].exists)
         XCTAssertTrue(app.staticTexts["Recorded by"].exists)
         app.navigationBars["Edit Ledger Item"].buttons["Cancel"].tap()
@@ -604,6 +605,12 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 }
 
 private extension XCUIApplication {
+    static func isolatedForTesting() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_ISOLATED_STORE"] = "1"
+        return app
+    }
+
     @MainActor
     func signInAndJoinDemoFamilyIfNeeded() {
         let simulatorButton = buttons["Use Simulator Test Account"]

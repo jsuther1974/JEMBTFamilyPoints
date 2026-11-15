@@ -9,6 +9,7 @@ struct JEMBTFamilyPointsTrackerApp: App {
 
     init() {
         do {
+            let isIsolatedUITest = ProcessInfo.processInfo.environment["UITEST_ISOLATED_STORE"] == "1"
             let schema = Schema([
                 AllowanceFamily.self,
                 FamilyInvitation.self,
@@ -22,8 +23,8 @@ struct JEMBTFamilyPointsTrackerApp: App {
             ])
             let configuration = ModelConfiguration(
                 schema: schema,
-                isStoredInMemoryOnly: false,
-                cloudKitDatabase: .automatic
+                isStoredInMemoryOnly: isIsolatedUITest,
+                cloudKitDatabase: isIsolatedUITest ? .none : .automatic
             )
             modelContainer = try ModelContainer(
                 for: schema,

@@ -5,6 +5,16 @@ the spreadsheet's expanding weekly columns with an auditable ledger: every
 award, penalty, reward purchase, approval, parent-pot allocation, and weekly
 settlement is a dated record.
 
+## Project guidance
+
+- Architecture and boundaries: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- Architecture decisions: [`docs/decisions/README.md`](docs/decisions/README.md)
+- Verified product behavior: [`docs/PRODUCT_RULES.md`](docs/PRODUCT_RULES.md)
+- Test strategy and release matrix: [`docs/TESTING.md`](docs/TESTING.md)
+- Human/agent collaboration: [`AGENTS.md`](AGENTS.md)
+- Current temporary handoff: [`WORK_STATUS.md`](WORK_STATUS.md)
+- Soundtrack provenance: [`SOUNDTRACK_PROVENANCE.md`](SOUNDTRACK_PROVENANCE.md)
+
 ## First-version behavior
 
 - Supports iPhone and iPad with a shared SwiftUI codebase.

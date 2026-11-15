@@ -71,4 +71,26 @@ struct JEMBT_Family_Points_TrackerTests {
         #expect(director.scene == .none)
     }
 
+    @MainActor
+    @Test func everyMusicalRoomHasABundledPublicDomainPerformance() {
+        let expectedResources: [SoundscapeDirector.Scene: String] = [
+            .storefront: "storefront-theme",
+            .rules: "rules-theme",
+            .ledger: "ledger-theme",
+            .statistics: "statistics-theme",
+            .family: "family-theme",
+            .rewardEntry: "rules-theme",
+            .penaltyEntry: "rules-theme"
+        ]
+        let bundle = Bundle(for: SoundscapeDirector.self)
+
+        for (scene, resourceName) in expectedResources {
+            #expect(scene.soundtrackResourceName == resourceName)
+            let url = bundle.url(forResource: resourceName, withExtension: "m4a", subdirectory: "Audio")
+                ?? bundle.url(forResource: resourceName, withExtension: "m4a")
+            #expect(url != nil, "Missing soundtrack resource: \(resourceName).m4a")
+        }
+        #expect(SoundscapeDirector.Scene.none.soundtrackResourceName == nil)
+    }
+
 }

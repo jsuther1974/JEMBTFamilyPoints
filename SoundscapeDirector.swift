@@ -16,6 +16,23 @@ final class SoundscapeDirector {
         case family
         case rewardEntry
         case penaltyEntry
+
+        var soundtrackResourceName: String? {
+            switch self {
+            case .none:
+                nil
+            case .storefront:
+                "storefront-theme"
+            case .rules, .rewardEntry, .penaltyEntry:
+                "rules-theme"
+            case .ledger:
+                "ledger-theme"
+            case .statistics:
+                "statistics-theme"
+            case .family:
+                "family-theme"
+            }
+        }
     }
 
     enum Cue {
@@ -122,9 +139,15 @@ final class SoundscapeDirector {
     }
 
     private func startMusic(_ scene: Scene) {
-        guard let player = try? AVAudioPlayer(data: musicData(for: scene)) else { return }
+        guard let resourceName = scene.soundtrackResourceName,
+              let url = Bundle(for: SoundscapeDirector.self).url(
+                forResource: resourceName,
+                withExtension: "m4a",
+                subdirectory: "Audio"
+              ) ?? Bundle(for: SoundscapeDirector.self).url(forResource: resourceName, withExtension: "m4a"),
+              let player = try? AVAudioPlayer(contentsOf: url) else { return }
         player.numberOfLoops = -1
-        player.volume = scene == .penaltyEntry ? 0.09 : 0.12
+        player.volume = scene == .penaltyEntry ? 0.07 : 0.09
         player.prepareToPlay()
         player.play()
         musicPlayer = player
@@ -219,100 +242,6 @@ final class SoundscapeDirector {
                 Tone(0.42, 0.5, 440, 0.14), Tone(0.62, 0.42, 329.63, 0.1)
             ], duration: 1.1)
         }
-    }
-
-    private func musicData(for scene: Scene) -> Data {
-        switch scene {
-        case .storefront:
-            return roomTheme(
-                melody: [523.25, 659.25, 783.99, 659.25, 587.33, 698.46, 880, 698.46,
-                         523.25, 659.25, 783.99, 1_046.5, 880, 783.99, 659.25, 587.33],
-                bass: [130.81, 146.83, 174.61, 196], beat: 0.42, style: .ragtime
-            )
-        case .rules:
-            return roomTheme(
-                melody: [523.25, 659.25, 783.99, 1_046.5, 987.77, 880, 783.99, 659.25,
-                         587.33, 739.99, 880, 1_174.66, 1_046.5, 880, 739.99, 587.33],
-                bass: [130.81, 196, 146.83, 220], beat: 0.3, style: .calliope
-            )
-        case .ledger:
-            return roomTheme(
-                melody: [261.63, 329.63, 392, 329.63, 293.66, 369.99, 440, 369.99,
-                         261.63, 311.13, 392, 466.16, 392, 349.23, 311.13, 293.66],
-                bass: [130.81, 146.83, 155.56, 146.83], beat: 0.36, style: .mechanical
-            )
-        case .statistics:
-            return roomTheme(
-                melody: [392, 523.25, 659.25, 783.99, 659.25, 698.46, 783.99, 1_046.5,
-                         440, 587.33, 698.46, 880, 783.99, 880, 987.77, 1_174.66],
-                bass: [98, 110, 130.81, 146.83], beat: 0.28, style: .march
-            )
-        case .family:
-            return roomTheme(
-                melody: [523.25, 659.25, 783.99, 659.25, 698.46, 880, 783.99, 659.25,
-                         587.33, 698.46, 880, 698.46, 659.25, 783.99, 1_046.5, 783.99],
-                bass: [130.81, 174.61, 146.83, 196], beat: 0.32, style: .dance
-            )
-        case .rewardEntry:
-            return roomTheme(
-                melody: [523.25, 659.25, 783.99, 1_046.5, 880, 783.99, 659.25, 783.99],
-                bass: [130.81, 174.61], beat: 0.28, style: .calliope
-            )
-        case .penaltyEntry:
-            return roomTheme(
-                melody: [392, 369.99, 349.23, 329.63, 349.23, 329.63, 293.66, 261.63],
-                bass: [98, 87.31], beat: 0.42, style: .mechanical
-            )
-        case .none:
-            return render([], duration: 0.2)
-        }
-    }
-
-    private enum RoomStyle {
-        case ragtime
-        case calliope
-        case mechanical
-        case march
-        case dance
-    }
-
-    private func roomTheme(
-        melody: [Double],
-        bass: [Double],
-        beat: Double,
-        style: RoomStyle
-    ) -> Data {
-        var tones: [Tone] = []
-        let melodyWave: Waveform = style == .calliope ? .triangle : .sine
-        for (index, frequency) in melody.enumerated() {
-            let start = Double(index) * beat
-            let syncopation = style == .ragtime && index.isMultiple(of: 4) ? beat * 0.16 : 0
-            tones.append(Tone(start + syncopation, beat * 0.72, frequency, 0.075, melodyWave))
-            tones.append(Tone(start + syncopation, beat * 0.64, frequency * 2, 0.014, .sine))
-
-            if style == .mechanical {
-                tones.append(Tone(start, 0.025, 180, 0.035, .noise, decay: 28))
-                if index.isMultiple(of: 4) {
-                    tones.append(Tone(start + beat * 0.52, 0.035, 120, 0.045, .noise, decay: 24))
-                }
-            } else if style == .march {
-                tones.append(Tone(start, beat * 0.12, index.isMultiple(of: 2) ? 92 : 138, 0.045, .square, decay: 12))
-            } else if style == .dance {
-                tones.append(Tone(start, beat * 0.11, index.isMultiple(of: 2) ? 82 : 164, 0.035, .square, decay: 13))
-                tones.append(Tone(start + beat * 0.5, 0.025, 900, 0.025, .noise, decay: 30))
-            }
-        }
-
-        for index in melody.indices where index.isMultiple(of: 2) {
-            let bassNote = bass[(index / 2) % bass.count]
-            let start = Double(index) * beat
-            tones.append(Tone(start, beat * 1.65, bassNote, 0.055, .triangle))
-            if style == .ragtime || style == .calliope {
-                tones.append(Tone(start + beat, beat * 0.62, bassNote * 2, 0.035, .triangle))
-                tones.append(Tone(start + beat, beat * 0.62, bassNote * 2.5, 0.025, .triangle))
-            }
-        }
-        return render(tones, duration: Double(melody.count) * beat)
     }
 
     private enum Waveform {
