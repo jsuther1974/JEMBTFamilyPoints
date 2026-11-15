@@ -83,7 +83,7 @@ jobs:
 
     # Override deployment targets only for analysis with the installed 26.2 SDKs.
     - name: Build iOS and embedded watchOS apps
-      if: matrix.build-mode == 'manual'
+      if: matrix.language == 'swift' && matrix.build-mode == 'manual'
       shell: bash
       run: |
         xcodebuild \
