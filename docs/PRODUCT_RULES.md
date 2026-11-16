@@ -24,6 +24,10 @@ Profile roles control participation:
 
 Authorization must be enforced before mutation. Hidden buttons are not sufficient authorization.
 
+Every protected mutation requires a complete, internally consistent active session: the Apple ID must match the membership, the membership and linked active profile must belong to the active family, and the membership must link to that profile. Viewer, missing, stale, mismatched, and foreign-family sessions are rejected.
+
+For activity recording, family admin, owner, and parent memberships receive immediate approval only when linked to a parent profile. Child and caregiver memberships may submit, but their entries remain pending. Recipients and rules are revalidated as active-family records at save time, and caregivers are never valid point recipients.
+
 ## Submission and review
 
 `ActivitySubmissionPolicy` determines the submission kind:
@@ -37,6 +41,15 @@ Child submissions and caregiver recommendations require parent approval. Parent 
 ## Family isolation
 
 Every family-owned rule, member, invitation, entry, settlement, statistic, and store operation must be scoped to the active family. When entries do not directly store `familyID`, scope them through the active family's member IDs.
+
+Cross-Apple-ID family sharing uses an explicit iCloud invitation in addition to the app's role invitation:
+
+- Only a family administrator/owner may create or manage the family's `CKShare`.
+- A participant first accepts the iCloud share, synchronizes the shared family locally, signs in with Apple, and redeems the family's one-time role code.
+- Accepting an iCloud share alone grants transport access but never creates an app membership or bypasses membership/profile authorization.
+- A shared payload that contains any foreign-family member, rule, rider, invitation, membership, entry, or settlement is rejected before local mutation.
+- Cloud conflicts never silently overwrite another device's snapshot. The user must fetch the server snapshot before publishing again.
+- Local data remains usable offline. Explicit Publish and Sync actions define the cross-account boundary.
 
 ## Members
 
@@ -129,12 +142,14 @@ Before closing, a parent must explicitly choose **Deduct** or **Absolve** for ev
 - Store purchases are grouped by item title with quantity and total points spent.
 - Pending entries trigger a warning. Continuing explicitly rejects them before closing; the safe default is not to close.
 - Closing is a global parent action for all unconfirmed child drafts.
+- Closing requires a family admin, owner, or parent membership linked to an active parent profile, and revalidates all supplied members, rules, entries, and settlements as family-owned before any pending rejection or settlement mutation.
 - Confirmed settlements store a transaction fingerprint and reviewer identity.
 - A week is closed only when all active children have matching settlements and the underlying transaction state still matches.
 
 ## Storefront
 
 - Only a user whose membership and profile are both child may purchase.
+- Checkout additionally requires the membership Apple ID, family, and linked child profile to match the active session; a child cannot purchase for another or foreign-family child.
 - Parent-capable roles manage store items.
 - Store items are family-scoped, enabled for shoppers, age eligible, and ordered by shelf position then title.
 - Inventory limits may be daily, weekly, or total.

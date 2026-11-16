@@ -3,9 +3,11 @@ import SwiftUI
 
 @main
 struct JEMBTFamilyPointsTrackerApp: App {
+    @UIApplicationDelegateAdaptor(FamilySharingAppDelegate.self) private var appDelegate
     private let modelContainer: ModelContainer
     @State private var appleIDManager = AppleIDManager()
     @State private var soundscape = SoundscapeDirector()
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         do {
@@ -30,6 +32,7 @@ struct JEMBTFamilyPointsTrackerApp: App {
                 for: schema,
                 configurations: [configuration]
             )
+            FamilySharingCoordinator.shared.configure(modelContainer: modelContainer)
             try SeedData.seedIfNeeded(in: modelContainer.mainContext)
         } catch {
             fatalError("Unable to initialize the point ledger: \(error)")
@@ -47,7 +50,14 @@ struct JEMBTFamilyPointsTrackerApp: App {
                     .environment(appleIDManager)
             }
         }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, appleIDManager.isSignedIn else { return }
+            Task { @MainActor in
+                try? await FamilySharingCoordinator.shared.synchronize(
+                    session: MutationSession(appleIDManager: appleIDManager)
+                )
+            }
+        }
         .modelContainer(modelContainer)
     }
 }
-

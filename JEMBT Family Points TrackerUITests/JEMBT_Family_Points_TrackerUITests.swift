@@ -409,7 +409,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testFamilyQuickAwardSavesAndAppearsInWeeklyLedger() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launch()
 
         app.signInAndJoinDemoFamilyIfNeeded()
@@ -509,7 +509,9 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         }
 
         XCTAssertGreaterThanOrEqual(dishesRows.count, 2)
-        let laundrySummary = app.descendants(matching: .any)["ledgerSummary-Mateo-Help with laundry"]
+        let laundrySummary = app.staticTexts
+            .matching(identifier: "ledgerSummary-Mateo-Help with laundry")
+            .element(matching: NSPredicate(format: "label == %@", "Help with laundry"))
         XCTAssertTrue(laundrySummary.waitForExistence(timeout: 5))
 
         laundrySummary.doubleTap()

@@ -33,6 +33,8 @@ struct ManageFamilyView: View {
     @State private var quickActivity: QuickActivityRequest?
     @State private var showingWeeklyLedger = false
     @State private var showingSettlement = false
+    @State private var cloudShareHandle: FamilyShareHandle?
+    @State private var isCloudSyncing = false
 
     private var canEdit: Bool {
         appleIDManager.currentMembership?.role.canAdministerFamily == true
@@ -146,6 +148,9 @@ struct ManageFamilyView: View {
         .navigationTitle("Family")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .secondaryAction) {
+                familyCloudActionsMenu
+            }
             if canEdit {
                 ToolbarItem(placement: .primaryAction) {
                     familyActionsMenu
@@ -178,6 +183,9 @@ struct ManageFamilyView: View {
         }
         .sheet(item: $pendingInviteShare) { invite in
             InviteShareSheet(invite: invite)
+        }
+        .sheet(item: $cloudShareHandle) { handle in
+            CloudSharingControllerView(handle: handle)
         }
         .confirmationDialog(
             "Remove family member?",
@@ -337,6 +345,75 @@ struct ManageFamilyView: View {
         .accessibilityIdentifier("familyActions")
     }
 
+    private var familyCloudActionsMenu: some View {
+        Menu {
+            Button("Sync family changes", systemImage: "icloud.and.arrow.down") {
+                fetchCloudChanges()
+            }
+            .disabled(isCloudSyncing)
+            if appleIDManager.currentMembership?.role != .viewer {
+                Button("Publish family changes", systemImage: "icloud.and.arrow.up") {
+                    publishCloudChanges()
+                }
+                .disabled(isCloudSyncing)
+            }
+            if canEdit {
+                Button("Invite with iCloud", systemImage: "person.2.wave.2") {
+                    prepareCloudShare()
+                }
+                .disabled(isCloudSyncing)
+            }
+        } label: {
+            Label("iCloud family sharing", systemImage: "icloud")
+        }
+        .accessibilityIdentifier("familyCloudSharing")
+    }
+
+    private func fetchCloudChanges() {
+        isCloudSyncing = true
+        Task { @MainActor in
+            defer { isCloudSyncing = false }
+            do {
+                try await FamilySharingCoordinator.shared.synchronize(
+                    session: MutationSession(appleIDManager: appleIDManager)
+                )
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func prepareCloudShare() {
+        isCloudSyncing = true
+        Task { @MainActor in
+            defer { isCloudSyncing = false }
+            do {
+                cloudShareHandle = try await FamilySharingCoordinator.shared.prepareShare(
+                    session: MutationSession(appleIDManager: appleIDManager)
+                )
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func publishCloudChanges() {
+        isCloudSyncing = true
+        Task { @MainActor in
+            defer { isCloudSyncing = false }
+            do {
+                try await FamilySharingCoordinator.shared.publish(
+                    session: MutationSession(appleIDManager: appleIDManager)
+                )
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     private func pointsSummary(for member: FamilyMember) -> MemberPointsSummary {
         let approvedEntries = familyEntries.filter {
             $0.memberID == member.id &&
@@ -381,6 +458,7 @@ struct ManageFamilyView: View {
         family.cashValuePerPoint = max(0, cashValuePerPoint)
         do {
             try modelContext.save()
+            publishFamilyChanges()
             errorMessage = nil
         } catch {
             family.name = previousName
@@ -418,6 +496,7 @@ struct ManageFamilyView: View {
                 memberName: result.member.name
             )
         }
+        publishFamilyChanges()
         errorMessage = nil
     }
 
@@ -519,6 +598,7 @@ private struct InviteShareSheet: View {
             role: draft.role,
             modelContext: modelContext
         )
+        publishFamilyChanges()
         errorMessage = nil
     }
 
@@ -543,6 +623,7 @@ private struct InviteShareSheet: View {
     private func deactivate(_ member: FamilyMember) {
         do {
             try appleIDManager.deactivateFamilyMember(member, modelContext: modelContext)
+            publishFamilyChanges()
             errorMessage = nil
         } catch {
             errorMessage = "The family member could not be removed: \(error.localizedDescription)"
@@ -561,10 +642,17 @@ private struct InviteShareSheet: View {
                 familyMemberID: member.id,
                 modelContext: modelContext
             )
+            publishFamilyChanges()
             errorMessage = nil
         } catch {
             errorMessage = "The invitation code could not be created: \(error.localizedDescription)"
         }
+    }
+
+    private func publishFamilyChanges() {
+        FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+            session: MutationSession(appleIDManager: appleIDManager)
+        )
     }
 }
 
@@ -1274,6 +1362,24 @@ struct QuickActivityView: View {
             return
         }
 
+        let session = MutationSession(appleIDManager: appleIDManager)
+        let approvalStatuses: [UUID: ApprovalStatus]
+        do {
+            approvalStatuses = try Dictionary(uniqueKeysWithValues: selectedDrafts.map { rule, _ in
+                (
+                    rule.id,
+                    try ProtectedMutationPolicy.activityApprovalStatus(
+                        session: session,
+                        recipient: member,
+                        rule: rule,
+                        kind: kind
+                    )
+                )
+            })
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         let submissionKind = ActivitySubmissionPolicy.submissionKind(
             member: appleIDManager.currentFamilyMember,
             membershipRole: appleIDManager.currentMembership?.role
@@ -1281,6 +1387,7 @@ struct QuickActivityView: View {
         let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let recorder = appleIDManager.currentFamilyMember?.name ?? submissionKind.submittedBy
         for (rule, draft) in selectedDrafts {
+            guard let approvalStatus = approvalStatuses[rule.id] else { continue }
             let occurrenceDates = PointsEngine.dates(
                 inWeekEnding: weekEnding,
                 matchingWeekdays: draft.weekdays
@@ -1300,10 +1407,10 @@ struct QuickActivityView: View {
                         notes: trimmedNotes,
                         points: entryPoints,
                         kind: kind,
-                        status: submissionKind.requiresParentApproval ? .pending : .approved,
+                        status: approvalStatus,
                         submittedBy: recorder,
-                        reviewedBy: submissionKind.requiresParentApproval ? nil : recorder,
-                        reviewedAt: submissionKind.requiresParentApproval ? nil : .now,
+                        reviewedBy: approvalStatus == .approved ? recorder : nil,
+                        reviewedAt: approvalStatus == .approved ? .now : nil,
                         quantity: draft.quantity,
                         measurementUnit: rule.measurementUnit
                     )
@@ -1313,6 +1420,9 @@ struct QuickActivityView: View {
 
         do {
             try modelContext.save()
+            FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+                session: MutationSession(appleIDManager: appleIDManager)
+            )
             dismiss()
         } catch {
             errorMessage = "The entries could not be saved: \(error.localizedDescription)"
@@ -1515,6 +1625,7 @@ struct WeeklyLedgerView: View {
             BulkCopyWeekView(
                 members: familyMembers,
                 entries: entries,
+                rules: rules.filter { $0.familyID == appleIDManager.currentFamily?.id },
                 currentWeekEnding: PointsEngine.weekEnding(containing: .now)
             )
         }
@@ -1585,17 +1696,23 @@ struct WeeklyLedgerView: View {
     }
 
     private func review(_ pendingEntries: [LedgerEntry], as status: ApprovalStatus) {
-        guard canReview, !pendingEntries.isEmpty else { return }
+        guard !pendingEntries.isEmpty else { return }
         let reviewer = appleIDManager.currentFamilyMember?.name ?? "Parent"
         let reviewedAt = Date.now
-        PointsEngine.applyReview(
-            to: pendingEntries,
-            status: status,
-            reviewedBy: reviewer,
-            reviewedAt: reviewedAt
-        )
         do {
+            _ = try ProtectedMutationPolicy.review(
+                session: MutationSession(appleIDManager: appleIDManager),
+                entries: pendingEntries,
+                familyMemberIDs: Set(familyMembers.map(\.id)),
+                familyRuleIDs: Set(rules.filter { $0.familyID == appleIDManager.currentFamily?.id }.map(\.id)),
+                status: status,
+                reviewedBy: reviewer,
+                reviewedAt: reviewedAt
+            )
             try modelContext.save()
+            FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+                session: MutationSession(appleIDManager: appleIDManager)
+            )
             reviewErrorMessage = nil
         } catch {
             modelContext.rollback()
@@ -1814,6 +1931,7 @@ private struct LedgerSubmissionRow: View {
 private struct BulkCopyWeekView: View {
     let members: [FamilyMember]
     let entries: [LedgerEntry]
+    let rules: [RuleTemplate]
     let currentWeekEnding: Date
 
     @Environment(AppleIDManager.self) private var appleIDManager
@@ -1823,9 +1941,10 @@ private struct BulkCopyWeekView: View {
     @State private var selectedEntryIDs: Set<UUID> = []
     @State private var errorMessage: String?
 
-    init(members: [FamilyMember], entries: [LedgerEntry], currentWeekEnding: Date) {
+    init(members: [FamilyMember], entries: [LedgerEntry], rules: [RuleTemplate], currentWeekEnding: Date) {
         self.members = members
         self.entries = entries
+        self.rules = rules
         self.currentWeekEnding = currentWeekEnding
         _sourceWeekEnding = State(initialValue: PointsEngine.previousWeekEnding(before: currentWeekEnding))
     }
@@ -1958,8 +2077,18 @@ private struct BulkCopyWeekView: View {
     }
 
     private func copyEntries() {
-        guard appleIDManager.currentMembership?.role.canReviewLedger == true,
-              !selectedEntries.isEmpty else { return }
+        guard !selectedEntries.isEmpty else { return }
+        do {
+            try ProtectedMutationPolicy.authorizeActivityCopy(
+                session: MutationSession(appleIDManager: appleIDManager),
+                entries: selectedEntries,
+                familyMemberIDs: Set(members.map(\.id)),
+                familyRuleIDs: Set(rules.map(\.id))
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         let recorder = appleIDManager.currentFamilyMember?.name ?? "Parent"
         let copies = PointsEngine.duplicateEntries(
             selectedEntries,
@@ -1969,6 +2098,9 @@ private struct BulkCopyWeekView: View {
         copies.forEach(modelContext.insert)
         do {
             try modelContext.save()
+            FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+                session: MutationSession(appleIDManager: appleIDManager)
+            )
             dismiss()
         } catch {
             modelContext.rollback()
@@ -2195,6 +2327,8 @@ private struct WeeklyLedgerRow: View {
 private struct LedgerEntryEditorView: View {
     let entries: [LedgerEntry]
     let memberName: String
+
+    @Environment(AppleIDManager.self) private var appleIDManager
     let weekEnding: Date
     let canEdit: Bool
 
@@ -2316,6 +2450,9 @@ private struct LedgerEntryEditorView: View {
         }
         do {
             try modelContext.save()
+            FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+                session: MutationSession(appleIDManager: appleIDManager)
+            )
             dismiss()
         } catch {
             modelContext.rollback()

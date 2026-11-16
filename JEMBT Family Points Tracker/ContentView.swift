@@ -305,6 +305,22 @@ private struct LogActivityView: View {
             errorMessage = "This item is not available for the selected child’s age."
             return
         }
+        let approvalStatus: ApprovalStatus
+        do {
+            approvalStatus = try ProtectedMutationPolicy.activityApprovalStatus(
+                session: MutationSession(appleIDManager: appleIDManager),
+                recipient: member,
+                rule: rule,
+                kind: rule.kind
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        let submissionKind = ActivitySubmissionPolicy.submissionKind(
+            member: appleIDManager.currentFamilyMember,
+            membershipRole: appleIDManager.currentMembership?.role
+        )
         let recorder = appleIDManager.currentFamilyMember?.name ?? submissionKind.submittedBy
         for occurredAt in PointsEngine.dates(inWeekEnding: weekEnding, matchingWeekdays: selectedWeekdays) {
             modelContext.insert(
@@ -317,10 +333,10 @@ private struct LogActivityView: View {
                     notes: notes,
                     points: points,
                     kind: rule.kind,
-                    status: submissionKind.requiresParentApproval ? .pending : .approved,
+                    status: approvalStatus,
                     submittedBy: recorder,
-                    reviewedBy: submissionKind.requiresParentApproval ? nil : recorder,
-                    reviewedAt: submissionKind.requiresParentApproval ? nil : .now,
+                    reviewedBy: approvalStatus == .approved ? recorder : nil,
+                    reviewedAt: approvalStatus == .approved ? .now : nil,
                     quantity: quantity,
                     measurementUnit: rule.measurementUnit,
                     riderTitle: nil
@@ -330,6 +346,9 @@ private struct LogActivityView: View {
 
         do {
             try modelContext.save()
+            FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+                session: MutationSession(appleIDManager: appleIDManager)
+            )
             selectedRuleID = nil
             quantity = 1
             points = 0
@@ -589,6 +608,18 @@ struct SettlementView: View {
 
     private func confirmAll(rejectingPending: Bool = false) {
         guard canConfirm, allDecisionsComplete, !unconfirmedDrafts.isEmpty else { return }
+        do {
+            try ProtectedMutationPolicy.authorizeSettlementClose(
+                session: MutationSession(appleIDManager: appleIDManager),
+                familyMembers: familyMembers,
+                entries: familyEntries,
+                rules: familyRules,
+                settlements: familySettlements
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         let closedWeek = effectiveWeekEnding
         let reviewer = appleIDManager.currentFamilyMember?.name ?? "Parent"
         let memberIDs = Set(familyMembers.map(\.id))
@@ -644,6 +675,9 @@ struct SettlementView: View {
 
         do {
             try modelContext.save()
+            FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+                session: MutationSession(appleIDManager: appleIDManager)
+            )
             errorMessage = nil
             showingPendingWarning = false
             completionMessage = "Congratulations! You closed the week ending \(closedWeek.formatted(date: .numeric, time: .omitted)) and distributed \(distributedPoints.formatted()) points!"

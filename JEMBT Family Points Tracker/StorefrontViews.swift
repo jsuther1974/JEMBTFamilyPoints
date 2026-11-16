@@ -359,6 +359,16 @@ struct FamilyStorefrontView: View {
             return "Only a child can purchase rewards from their own account."
         }
 
+        do {
+            try ProtectedMutationPolicy.authorizeStoreCheckout(
+                session: MutationSession(appleIDManager: appleIDManager),
+                child: child,
+                items: cartItems
+            )
+        } catch {
+            return error.localizedDescription
+        }
+
         let now = Date.now
         if let error = StorefrontEngine.checkoutError(
             quantities: cartQuantities,
@@ -397,6 +407,7 @@ struct FamilyStorefrontView: View {
 
         do {
             try modelContext.save()
+            publishFamilyChanges()
             let count = cartCount
             cartQuantities.removeAll()
             purchaseMessage = "You bought \(count) item\(count == 1 ? "" : "s")!"
@@ -454,6 +465,13 @@ struct FamilyStorefrontView: View {
         target.requiresApproval = true
         target.isEnabled = draft.isEnabled
         try modelContext.save()
+        publishFamilyChanges()
+    }
+
+    private func publishFamilyChanges() {
+        FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+            session: MutationSession(appleIDManager: appleIDManager)
+        )
     }
 }
 

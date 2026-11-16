@@ -14,6 +14,7 @@ struct SignInWithAppleView: View {
     @State private var showingJoin = false
     @State private var showingCreate = false
     @State private var errorMessage: String?
+    @State private var isFetchingSharedFamilies = false
     @FocusState private var focusedCreateFamilyField: CreateFamilyField?
 
     private enum CreateFamilyField {
@@ -74,6 +75,13 @@ struct SignInWithAppleView: View {
                 Divider()
                 Text("What would you like to do?")
                     .font(.headline)
+
+                Button("Sync accepted iCloud invitations") {
+                    fetchSharedFamilies()
+                }
+                .buttonStyle(.bordered)
+                .disabled(isFetchingSharedFamilies)
+                .accessibilityIdentifier("syncSharedFamilies")
 
                 Button("Join a family with an invitation code") {
                     showingJoin = true
@@ -229,18 +237,56 @@ struct SignInWithAppleView: View {
         }
     }
 
+    private func fetchSharedFamilies() {
+        isFetchingSharedFamilies = true
+        Task { @MainActor in
+            defer { isFetchingSharedFamilies = false }
+            do {
+                guard let appleID = appleIDManager.currentAppleID else { return }
+                _ = try await FamilySharingCoordinator.shared.fetchSharedFamilies(signedInAppleID: appleID)
+                errorMessage = nil
+            } catch {
+                errorMessage = "Shared families could not be synchronized: \(error.localizedDescription)"
+            }
+        }
+    }
+
     private func joinFamily() {
         guard let appleID = appleIDManager.currentAppleID else { return }
-        do {
-            try appleIDManager.acceptInvitation(
-                code: invitationCode,
-                appleID: appleID,
-                modelContext: modelContext
-            )
-            showingJoin = false
-            invitationCode = ""
-        } catch {
-            errorMessage = error.localizedDescription
+        let code = invitationCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        let usesIsolatedUITestStore = ProcessInfo.processInfo.environment["UITEST_ISOLATED_STORE"] == "1"
+        isFetchingSharedFamilies = true
+        Task { @MainActor in
+            defer { isFetchingSharedFamilies = false }
+            do {
+                if !usesIsolatedUITestStore {
+                    _ = try await FamilySharingCoordinator.shared.fetchSharedFamilies(
+                        signedInAppleID: appleID,
+                        invitationCode: code
+                    )
+                }
+                try appleIDManager.acceptInvitation(
+                    code: code,
+                    appleID: appleID,
+                    modelContext: modelContext
+                )
+                showingJoin = false
+                invitationCode = ""
+                guard !usesIsolatedUITestStore else {
+                    errorMessage = nil
+                    return
+                }
+                do {
+                    try await FamilySharingCoordinator.shared.publish(
+                        session: MutationSession(appleIDManager: appleIDManager)
+                    )
+                    errorMessage = nil
+                } catch {
+                    errorMessage = "The family was joined locally, but the new membership could not be published: \(error.localizedDescription)"
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 

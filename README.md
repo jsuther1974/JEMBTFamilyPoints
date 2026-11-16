@@ -32,15 +32,11 @@ settlement is a dated record.
 
 ## Important implementation choice
 
-The source uses SwiftData for the local ledger and enables its CloudKit-backed
-configuration. That is sufficient for a person's devices signed into the same
-iCloud account. A family using separate Apple IDs needs a shared CloudKit zone
-and `CKShare` invitation flow before production use. Keep the model and
-`PointsEngine` unchanged; replace the persistence boundary with shared
-CloudKit records or a Core Data `NSPersistentCloudKitContainer` sharing layer.
+SwiftData remains the durable offline ledger and keeps its existing `.automatic` CloudKit configuration for a person's own devices. Separate Apple IDs share a family through the explicit `FamilyCloudSharing` boundary instead of SwiftData automatic sync.
 
-Do not ship the app assuming SwiftData's automatic private-database sync shares
-records across separate family Apple IDs.
+A family administrator creates a family-specific custom CloudKit zone and `CKShare`, then uses the system iCloud sharing controller to invite participants. The owner publishes a versioned, family-scoped snapshot containing rules, members, memberships, invitations, ledger/audit records, and confirmed settlement history. Participants accept the system invitation, synchronize the shared database into local SwiftData, sign in with Apple, and redeem the app role code. Change-tag conflicts require a fetch before retry rather than silently overwriting server data.
+
+Production use still requires CloudKit schema deployment and signed physical-device verification with two different iCloud accounts. Automatic SwiftData private-database sync is not the cross-account sharing mechanism.
 
 ## Create the Xcode project on a Mac
 
@@ -87,11 +83,8 @@ rules editor before use.
 
 ## Recommended next implementation sequence
 
-1. Open and run the local app in Xcode.
-2. Add editing screens for family members and rule templates.
-3. Add authentication/role selection for parent versus child mode.
-4. Implement shared CloudKit-zone creation, `CKShare` invitations, and conflict
-   handling for separate Apple IDs.
-5. Add notifications for pending approvals and Sunday settlement review.
-6. Add CSV import for historical weekly totals if that becomes useful.
-
+1. Validate the CloudKit share lifecycle on two signed physical devices using separate Apple IDs.
+2. Deploy the `SharedFamily` record schema to the production CloudKit environment.
+3. Add remote-change notifications/background refresh if product policy should move beyond explicit Publish and Sync actions.
+4. Add notifications for pending approvals and Sunday settlement review.
+5. Add CSV import for historical weekly totals if that becomes useful.

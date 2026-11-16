@@ -61,18 +61,21 @@ Parents and other rule managers maintain store inventory. A user can purchase on
 
 ## Persistence and CloudKit
 
-Normal launches use persistent SwiftData with `cloudKitDatabase: .automatic`. UI-test launches may select an in-memory store with CloudKit disabled through `UITEST_ISOLATED_STORE=1`.
+Normal launches keep the existing persistent SwiftData configuration with `cloudKitDatabase: .automatic`. UI-test launches may select an in-memory store with CloudKit disabled through `UITEST_ISOLATED_STORE=1`.
 
-This test switch must never alter production behavior.
+Cross-Apple-ID sharing is a separate, explicit boundary in `FamilyCloudSharing.swift`:
 
-Automatic SwiftData CloudKit storage does not by itself provide cross-Apple-ID family sharing. The production limitation and future shared-zone requirement are documented in `README.md`.
+- An administrator publishes one family into its own custom private CloudKit zone and root `SharedFamily` record.
+- A `CKShare` and `UICloudSharingController` invite specific iCloud participants; `CKSharingSupported` routes accepted invitations to `FamilySharingAppDelegate`.
+- The shared record stores a versioned, family-scoped JSON snapshot as a `CKAsset`. The snapshot includes members, invitations, memberships, rules/riders, ledger entries, and confirmed settlements, including recorder/reviewer and fingerprint audit fields.
+- The share-acceptance callback accepts transport access only. A subsequent explicit sync fetches accepted shared-zone records from the participant's shared database; owners use the same fetch path for private shared zones.
+- Sync requires a complete active-family session, an existing membership for the signed-in Apple ID, or a matching unexpired one-time invitation code. Accepting a share alone never establishes app membership.
+- Every snapshot is size-bounded and validated as a single-family graph before any local mutation. Duplicate identities, invitation codes, malformed values, and cross-family or immutable-link identifier collisions are rejected. Import is all-or-nothing at the validation boundary and reconciles only that family.
+- Publishing requires a complete authorized session. Creating/managing a share requires family-administrator capability; non-viewer members may publish only their active family after app-level mutation authorization has already succeeded.
+- The last fetched CloudKit change tag is retained per family. Publishing without that baseline, or after a server-side change, fails as a conflict and requires fetching before retrying. No last-writer-wins overwrite is attempted.
+- Local SwiftData remains available offline. Cloud publication and fetch are explicit user actions; automatic SwiftData CloudKit remains private-device synchronization and is not treated as family sharing.
 
-For persisted-model changes:
-
-- Prefer additive optional fields or fields with safe defaults.
-- Preserve raw-value fallbacks for existing records.
-- Consider CloudKit schema constraints and existing settlement history.
-- Test opening or constructing data that omits new values.
+This additive boundary does not move or recreate the production SwiftData store.
 
 ## iPhone and iPad
 
@@ -99,4 +102,4 @@ The Watch app decodes the snapshot into Codable value types, caches it in `UserD
 
 ## Known architectural limitation
 
-Before production use across separate family Apple IDs, implement and validate a shared CloudKit zone/`CKShare` or another explicit shared persistence boundary. Do not describe automatic private-database sync as family sharing.
+CloudKit share creation, acceptance, payload mapping, family validation, authorization, and conflict behavior are testable through `FamilyShareTransport`. End-to-end invitation delivery, iCloud-account state, push propagation, CloudKit production schema deployment, and multi-device conflict recovery still require signed physical-device verification with separate Apple IDs.

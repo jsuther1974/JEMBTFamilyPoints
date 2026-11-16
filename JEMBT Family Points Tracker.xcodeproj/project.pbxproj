@@ -3,12 +3,13 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 110;
 	objects = {
 
 /* Begin PBXBuildFile section */
 		37550E05304FFE90008D9993 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 37550E04304FFE90008D9993 /* README.md */; };
 		37581B5830A6C651006B945E /* SoundscapeDirector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37581B5730A6C651006B945E /* SoundscapeDirector.swift */; };
+		37EA543430AA67A400AFE6F8 /* MutationAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37EA543330AA67A400AFE6F8 /* MutationAuthorization.swift */; };
 		94A7BFDC30A7C8820072F87F /* Family Points Watch App Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 94A7BFDB30A7C8820072F87F /* Family Points Watch App Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		94A7BFFC30A7C8830072F87F /* Family Points Watch App.app in Resources */ = {isa = PBXBuildFile; fileRef = 94A7BFD630A7C8820072F87F /* Family Points Watch App.app */; };
 /* End PBXBuildFile section */
@@ -62,7 +63,7 @@
 		94A7C00030A7C8830072F87F /* Embed Watch Content */ = {
 			isa = PBXCopyFilesBuildPhase;
 			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
-			dstSubfolderSpec = 16;
+			dstSubfolder = Product;
 			files = (
 				94A7BFDC30A7C8820072F87F /* Family Points Watch App Watch App.app in Embed Watch Content */,
 			);
@@ -76,6 +77,7 @@
 		37550DE6304FFCDD008D9993 /* JEMBT Family Points TrackerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "JEMBT Family Points TrackerUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		37550E04304FFE90008D9993 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		37581B5730A6C651006B945E /* SoundscapeDirector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundscapeDirector.swift; sourceTree = "<group>"; };
+		37EA543330AA67A400AFE6F8 /* MutationAuthorization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MutationAuthorization.swift; sourceTree = "<group>"; };
 		94A7BFD630A7C8820072F87F /* Family Points Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Family Points Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		94A7BFDB30A7C8820072F87F /* Family Points Watch App Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Family Points Watch App Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		94A7BFEA30A7C8830072F87F /* Family Points Watch App Watch AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Family Points Watch App Watch AppTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -173,6 +175,7 @@
 				94A7BFDF30A7C8820072F87F /* Family Points Watch App Watch App */,
 				94A7BFED30A7C8830072F87F /* Family Points Watch App Watch AppTests */,
 				94A7BFF730A7C8830072F87F /* Family Points Watch App Watch AppUITests */,
+				37EA543330AA67A400AFE6F8 /* MutationAuthorization.swift */,
 				37550DCC304FFCDD008D9993 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -440,6 +443,7 @@
 		37550DC7304FFCDD008D9993 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				37EA543430AA67A400AFE6F8 /* MutationAuthorization.swift in Sources */,
 				37581B5830A6C651006B945E /* SoundscapeDirector.swift in Sources */,
 			);
 		};

@@ -191,6 +191,7 @@ struct RuleCatalogListView: View {
         target.requiresApproval = true
         target.isEnabled = draft.isEnabled
         try modelContext.save()
+        publishFamilyChanges()
         errorMessage = nil
     }
 
@@ -203,6 +204,7 @@ struct RuleCatalogListView: View {
         }
         do {
             try modelContext.save()
+            publishFamilyChanges()
             errorMessage = nil
         } catch {
             errorMessage = "The shelf order could not be saved: \(error.localizedDescription)"
@@ -215,10 +217,17 @@ struct RuleCatalogListView: View {
         modelContext.delete(rule)
         do {
             try modelContext.save()
+            publishFamilyChanges()
             errorMessage = nil
         } catch {
             errorMessage = "The item could not be deleted: \(error.localizedDescription)"
         }
+    }
+
+    private func publishFamilyChanges() {
+        FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+            session: MutationSession(appleIDManager: appleIDManager)
+        )
     }
 }
 

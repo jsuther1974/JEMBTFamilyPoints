@@ -77,6 +77,7 @@ Include every model required by relationships or code paths under test. Avoid re
 | Family quick activity | Quick award/penalty UI flow through resulting Ledger row |
 | Ledger | Aggregation/sort/review unit tests and collapsed-day/edit UI flow |
 | SwiftData schema/config | In-memory unit construction, production build, and existing-data/default reasoning |
+| Cross-Apple-ID sharing | Snapshot round trip with full ledger/settlement audit, malformed two-family rejection before mutation, administrator and unauthorized roles, participant import, conflict propagation, app build, then two physical iCloud accounts |
 | iPhone member editor | Keyboard focus/tab/date confirmation regressions |
 | iPad member editor | Regular-width native role/date interaction regression on iPad |
 | Watch snapshot | Watch unit tests, iPhone publish path, Watch build, cached/offline behavior |
@@ -118,3 +119,9 @@ Before user testing or release:
 - Production configuration is not using the isolated in-memory test store.
 - Family isolation and role authorization tests pass.
 - No unresolved audio-resource, SwiftData, CloudKit, or navigation warnings remain.
+
+## CloudKit sharing tests
+
+`FamilyCloudSharingTests` use an injected `FamilyShareTransport` and in-memory SwiftData with CloudKit disabled. They do not contact iCloud. They verify deterministic payload mapping, exact family scoping, recorder/reviewer and settlement fingerprint preservation, unauthorized-role rejection, participant import, and conflict reporting.
+
+Simulator/unit success is not end-to-end CloudKit proof. Before release, use two physical devices with different Apple IDs to verify share presentation and delivery, `userDidAcceptCloudKitShareWith`, shared-database visibility, explicit fetch/publish, offline edits, server-change conflicts, participant removal, and production CloudKit schema deployment.
