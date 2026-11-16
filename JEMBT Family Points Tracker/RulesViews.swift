@@ -150,6 +150,10 @@ struct RuleCatalogListView: View {
         guard canEdit, let familyID = appleIDManager.currentFamily?.id else {
             throw RuleEditingError.notAuthorized
         }
+        try ProtectedMutationPolicy.authorizeRuleManagement(
+            session: MutationSession(appleIDManager: appleIDManager),
+            targetRules: rule.map { [$0] } ?? []
+        )
         let target = rule ?? RuleTemplate(
             familyID: familyID,
             title: draft.title,
@@ -190,21 +194,28 @@ struct RuleCatalogListView: View {
         target.acceleratorEnabled = false
         target.requiresApproval = true
         target.isEnabled = draft.isEnabled
-        try modelContext.save()
-        publishFamilyChanges()
+        try persistFamilyMutation { try modelContext.save() }
         errorMessage = nil
     }
 
     private func moveStoreItems(from offsets: IndexSet, to destination: Int) {
         guard canEdit, catalog == .tradingPost else { return }
+        do {
+            try ProtectedMutationPolicy.authorizeRuleManagement(
+                session: MutationSession(appleIDManager: appleIDManager),
+                targetRules: rules
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         var reordered = rules
         reordered.move(fromOffsets: offsets, toOffset: destination)
         for (index, rule) in reordered.enumerated() {
             rule.storeShelfPosition = index
         }
         do {
-            try modelContext.save()
-            publishFamilyChanges()
+            try persistFamilyMutation { try modelContext.save() }
             errorMessage = nil
         } catch {
             errorMessage = "The shelf order could not be saved: \(error.localizedDescription)"
@@ -213,20 +224,29 @@ struct RuleCatalogListView: View {
 
     private func delete(_ rule: RuleTemplate) {
         guard canEdit else { return }
+        do {
+            try ProtectedMutationPolicy.authorizeRuleManagement(
+                session: MutationSession(appleIDManager: appleIDManager),
+                targetRules: [rule]
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         riders(for: rule).forEach(modelContext.delete)
         modelContext.delete(rule)
         do {
-            try modelContext.save()
-            publishFamilyChanges()
+            try persistFamilyMutation { try modelContext.save() }
             errorMessage = nil
         } catch {
             errorMessage = "The item could not be deleted: \(error.localizedDescription)"
         }
     }
 
-    private func publishFamilyChanges() {
-        FamilySharingCoordinator.shared.publishAfterProtectedMutation(
-            session: MutationSession(appleIDManager: appleIDManager)
+    private func persistFamilyMutation<T>(_ mutation: () throws -> T) throws -> T {
+        try FamilySharingCoordinator.shared.performProtectedMutation(
+            session: MutationSession(appleIDManager: appleIDManager),
+            mutation
         )
     }
 }

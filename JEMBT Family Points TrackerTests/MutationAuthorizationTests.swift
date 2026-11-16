@@ -213,6 +213,107 @@ final class MutationAuthorizationTests: XCTestCase {
         )) { XCTAssertEqual($0 as? ProtectedMutationError, .foreignRule) }
     }
 
+    func testAdministrationAndRuleManagementCapabilitiesAcrossAllRoles() throws {
+        for role in FamilyMembershipRole.allCases {
+            let fixture = try makeFixture(role: role)
+            let administer = {
+                try ProtectedMutationPolicy.authorizeFamilyAdministration(
+                    session: fixture.session,
+                    targetFamily: fixture.family
+                )
+            }
+            let manageRule = {
+                try ProtectedMutationPolicy.authorizeRuleManagement(
+                    session: fixture.session,
+                    targetRules: [fixture.reward]
+                )
+            }
+
+            if role.canAdministerFamily {
+                XCTAssertNoThrow(try administer(), "Unexpected administration denial for \(role)")
+            } else {
+                XCTAssertThrowsError(try administer()) {
+                    XCTAssertEqual($0 as? ProtectedMutationError, .notAuthorized)
+                }
+            }
+            if role.canManageRules {
+                XCTAssertNoThrow(try manageRule(), "Unexpected rule denial for \(role)")
+            } else {
+                XCTAssertThrowsError(try manageRule()) {
+                    XCTAssertEqual($0 as? ProtectedMutationError, .notAuthorized)
+                }
+            }
+        }
+    }
+
+    func testAdministrationRejectsForeignFamilyMemberInvitationAndRuleTargets() throws {
+        let fixture = try makeFixture(role: .familyAdmin)
+        let foreignFamily = AllowanceFamily(name: "Foreign", createdByAppleID: "foreign")
+        let foreignMember = FamilyMember(familyID: foreignFamily.id, name: "Foreign", role: .child)
+        let foreignRule = makeRule(familyID: foreignFamily.id, kind: .reward)
+        let foreignInvitation = FamilyInvitation(
+            familyID: foreignFamily.id,
+            familyMemberID: foreignMember.id,
+            code: "FOREIGN",
+            role: .child
+        )
+
+        XCTAssertThrowsError(try ProtectedMutationPolicy.authorizeFamilyAdministration(
+            session: fixture.session,
+            targetFamily: foreignFamily
+        )) { XCTAssertEqual($0 as? ProtectedMutationError, .familyMismatch) }
+        XCTAssertThrowsError(try ProtectedMutationPolicy.authorizeMemberAdministration(
+            session: fixture.session,
+            targetFamily: fixture.family,
+            targetMember: foreignMember
+        )) { XCTAssertEqual($0 as? ProtectedMutationError, .foreignRecipient) }
+        XCTAssertThrowsError(try ProtectedMutationPolicy.authorizeInvitationAdministration(
+            session: fixture.session,
+            targetFamily: fixture.family,
+            targetMember: fixture.child,
+            targetInvitation: foreignInvitation
+        )) { XCTAssertEqual($0 as? ProtectedMutationError, .familyMismatch) }
+        XCTAssertThrowsError(try ProtectedMutationPolicy.authorizeRuleManagement(
+            session: fixture.session,
+            targetRules: [foreignRule]
+        )) { XCTAssertEqual($0 as? ProtectedMutationError, .foreignRule) }
+    }
+
+    func testLedgerEditingRequiresReviewerAndRejectsForeignEntriesBeforeMutation() throws {
+        let owner = try makeFixture(role: .owner)
+        let entry = makeEntry(memberID: owner.child.id, ruleID: owner.reward.id)
+        XCTAssertNoThrow(try ProtectedMutationPolicy.authorizeLedgerEditing(
+            session: owner.session,
+            entries: [entry],
+            familyMemberIDs: [owner.actor.id, owner.child.id],
+            familyRuleIDs: [owner.reward.id]
+        ))
+
+        let caregiver = try makeFixture(role: .caregiver)
+        XCTAssertThrowsError(try ProtectedMutationPolicy.authorizeLedgerEditing(
+            session: caregiver.session,
+            entries: [makeEntry(memberID: caregiver.child.id, ruleID: caregiver.reward.id)],
+            familyMemberIDs: [caregiver.actor.id, caregiver.child.id],
+            familyRuleIDs: [caregiver.reward.id]
+        )) { XCTAssertEqual($0 as? ProtectedMutationError, .notAuthorized) }
+
+        XCTAssertThrowsError(try ProtectedMutationPolicy.authorizeLedgerEditing(
+            session: owner.session,
+            entries: [makeEntry(memberID: UUID(), ruleID: owner.reward.id)],
+            familyMemberIDs: [owner.actor.id, owner.child.id],
+            familyRuleIDs: [owner.reward.id]
+        )) { XCTAssertEqual($0 as? ProtectedMutationError, .foreignEntry) }
+    }
+
+    func testRoleProfileMismatchIsRejectedForProtectedAdministration() throws {
+        let fixture = try makeFixture(role: .familyAdmin)
+        fixture.actor.role = .caregiver
+        XCTAssertThrowsError(try ProtectedMutationPolicy.authorizeFamilyAdministration(
+            session: fixture.session,
+            targetFamily: fixture.family
+        )) { XCTAssertEqual($0 as? ProtectedMutationError, .profileMismatch) }
+    }
+
     private func activity(session: MutationSession, fixture: Fixture) throws -> ApprovalStatus {
         try ProtectedMutationPolicy.activityApprovalStatus(
             session: session,

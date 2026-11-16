@@ -23,6 +23,8 @@
 
 - Trace affected symbols, callers, tests, family scoping, and platform implications before editing.
 - Prefer the smallest coherent change and avoid unrelated reformatting.
+- Never place real family names, birthdates, contact identifiers, email addresses, invitation codes, or production records in source-controlled seed data, samples, tests, screenshots, logs, or documentation.
+- Use clearly fictional fixture names, synthetic boundary-safe dates, `example.invalid` email addresses, and non-production identifiers. Do not copy data from Contacts, CloudKit, spreadsheets, or a production store into fixtures.
 - Add stable accessibility identifiers to important interactive controls and stateful rows.
 - Keep iPhone, iPad, and Watch behavior in mind; test an affected idiom rather than inferring it from another.
 - Do not read or edit `project.pbxproj` directly. Use Xcode project operations for targets, build settings, Info.plist keys, entitlements, and file membership.

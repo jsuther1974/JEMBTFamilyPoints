@@ -7,7 +7,7 @@ final class PointsEngineTests: XCTestCase {
     func testAgeUsesSaturdayAtEndOfWeek() {
         let child = FamilyMember(
             name: "Child",
-            birthDate: date(2018, 12, 30),
+            birthDate: date(2018, 12, 31),
             role: .child
         )
 
@@ -128,16 +128,16 @@ final class PointsEngineTests: XCTestCase {
     func testDaysUntilNextBirthdayHandlesTodayMissingDatesAndLeapDay() {
         XCTAssertEqual(
             PointsEngine.daysUntilNextBirthday(
-                from: date(2018, 12, 30),
-                after: date(2026, 12, 29),
+                from: date(2018, 12, 31),
+                after: date(2026, 12, 30),
                 calendar: calendar
             ),
             1
         )
         XCTAssertEqual(
             PointsEngine.daysUntilNextBirthday(
-                from: date(2018, 12, 30),
-                after: date(2026, 12, 30),
+                from: date(2018, 12, 31),
+                after: date(2026, 12, 31),
                 calendar: calendar
             ),
             0
@@ -145,7 +145,7 @@ final class PointsEngineTests: XCTestCase {
         XCTAssertNil(
             PointsEngine.daysUntilNextBirthday(
                 from: nil,
-                after: date(2026, 12, 30),
+                after: date(2026, 12, 31),
                 calendar: calendar
             )
         )

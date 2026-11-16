@@ -6,17 +6,6 @@ import SwiftData
 import SwiftUI
 import UIKit
 
-private func familyShareProfileRole(for role: FamilyMembershipRole) -> MemberRole {
-    switch role {
-    case .familyAdmin, .owner, .parent:
-        .parent
-    case .caregiver:
-        .caregiver
-    case .child, .viewer:
-        .child
-    }
-}
-
 struct FamilySharePayload: Codable, Equatable {
     static let currentSchemaVersion = 1
     static let maximumEncodedBytes = 10 * 1_024 * 1_024
@@ -58,7 +47,10 @@ struct FamilySharePayload: Codable, Equatable {
         riders.allSatisfy({ ruleIDs.contains($0.ruleID) }),
         entries.allSatisfy({
             memberIDs.contains($0.memberID) && $0.ruleID.map(ruleIDs.contains) != false
-        }), settlements.allSatisfy({ memberIDs.contains($0.childID) }) else {
+        }), settlements.allSatisfy({ settlement in
+            memberIDs.contains(settlement.childID) &&
+                members.first(where: { $0.id == settlement.childID })?.roleRawValue == MemberRole.child.rawValue
+        }) else {
             throw FamilySharingError.invalidFamilyBoundary
         }
 
@@ -114,18 +106,27 @@ struct FamilySharePayload: Codable, Equatable {
         for membership in memberships {
             guard let memberID = membership.familyMemberID,
                   let member = membersByID[memberID],
+                  member.isActive,
                   let role = FamilyMembershipRole(rawValue: membership.roleRawValue),
                   let profileRole = MemberRole(rawValue: member.roleRawValue),
-                  role == .viewer || familyShareProfileRole(for: role) == profileRole else {
+                  role.isCompatible(with: profileRole) else {
                 throw FamilySharingError.invalidRoleProfile
             }
         }
         for invitation in invitations {
-            guard let memberID = invitation.familyMemberID else { continue }
+            guard let role = FamilyMembershipRole(rawValue: invitation.roleRawValue) else {
+                throw FamilySharingError.invalidRoleProfile
+            }
+            guard let memberID = invitation.familyMemberID else {
+                guard role != .child, role != .viewer else {
+                    throw FamilySharingError.invalidRoleProfile
+                }
+                continue
+            }
             guard let member = membersByID[memberID],
-                  let role = FamilyMembershipRole(rawValue: invitation.roleRawValue),
+                  member.isActive,
                   let profileRole = MemberRole(rawValue: member.roleRawValue),
-                  role == .viewer || familyShareProfileRole(for: role) == profileRole else {
+                  role.isCompatible(with: profileRole) else {
                 throw FamilySharingError.invalidRoleProfile
             }
         }
@@ -478,11 +479,19 @@ struct RuleDTO: Codable, Equatable, Identifiable {
     }
 }
 
+struct FetchedFamilySharePayload: Equatable {
+    let familyID: UUID
+    let data: Data
+    let changeTag: String?
+}
+
 protocol FamilyShareTransport {
     func createShare(familyID: UUID, familyName: String, payload: Data) async throws -> FamilyShareHandle
     func publish(familyID: UUID, payload: Data) async throws
+    func resolveConflictKeepingLocal(_ fetched: FetchedFamilySharePayload, payload: Data) async throws
     func accept(_ metadata: CKShare.Metadata) async throws
-    func fetchSharedPayloads() async throws -> [Data]
+    func fetchSharedPayloads() async throws -> [FetchedFamilySharePayload]
+    func acknowledgeFetchedPayload(_ payload: FetchedFamilySharePayload) async throws
 }
 
 struct FamilyShareHandle: Identifiable {
@@ -510,6 +519,7 @@ enum FamilySharingError: LocalizedError, Equatable {
     case localAndRemoteChangesConflict
     case missingPayload
     case unsupportedSchema
+    case fetchedRecordMismatch
 
     var errorDescription: String? {
         switch self {
@@ -549,22 +559,41 @@ enum FamilySharingError: LocalizedError, Equatable {
             "The shared family data is unavailable."
         case .unsupportedSchema:
             "This shared family uses an unsupported data version."
+        case .fetchedRecordMismatch:
+            "The CloudKit record identity does not match its family snapshot."
         }
     }
 }
 
 @MainActor
 final class FamilySharingCoordinator: ObservableObject {
+    struct PublicationIntent: Equatable {
+        fileprivate let id: UUID
+        let familyID: UUID
+        fileprivate let previousDirtyIntent: FamilySharePublicationState.DirtyIntent?
+        fileprivate let generation: Int
+        fileprivate let isEnabled: Bool
+    }
+
     static let shared = FamilySharingCoordinator()
 
     @Published private(set) var lastError: String?
     @Published private(set) var isSynchronizing = false
+    @Published private(set) var conflictingFamilyIDs: Set<UUID> = []
     private(set) var modelContainer: ModelContainer?
     private var transport: FamilyShareTransport
-    private var pendingPublishTask: Task<Void, Never>?
+    private let publicationDelay: Duration
+    private var pendingPublishTasks: [UUID: Task<Void, Never>] = [:]
+    private var pendingPublishTokens: [UUID: UUID] = [:]
+    private var pendingConflicts: [UUID: FetchedFamilySharePayload] = [:]
+    private var preparedPublicationIntentIDs: [UUID: Set<UUID>] = [:]
 
-    init(transport: FamilyShareTransport? = nil) {
+    init(
+        transport: FamilyShareTransport? = nil,
+        publicationDelay: Duration = .milliseconds(300)
+    ) {
         self.transport = transport ?? CloudKitFamilyShareTransport()
+        self.publicationDelay = publicationDelay
     }
 
     func configure(modelContainer: ModelContainer) {
@@ -576,38 +605,256 @@ final class FamilySharingCoordinator: ObservableObject {
             throw FamilySharingError.missingPayload
         }
         let family = try authorize(session: session, requireAdministrator: true)
+        let publishedGeneration = FamilySharePublicationState.dirtyIntent(familyID: family.id)?.generation
         let payload = try FamilyShareStore.export(family: family, from: context)
         let handle = try await perform {
             try await transport.createShare(familyID: family.id, familyName: family.name, payload: payload)
         }
         FamilyShareBaseline.remember(payload: payload, familyID: family.id)
+        FamilySharePublicationState.clearDirtyIfCurrent(
+            familyID: family.id,
+            publishedGeneration: publishedGeneration
+        )
         return handle
     }
 
     func publish(session: MutationSession) async throws {
+        let family = try authorize(session: session, requireAdministrator: false)
+        try await publish(family: family, publishedGeneration: FamilySharePublicationState.dirtyIntent(
+            familyID: family.id
+        )?.generation)
+    }
+
+    private func publish(family: AllowanceFamily, publishedGeneration: Int?) async throws {
         guard let context = modelContainer?.mainContext else {
             throw FamilySharingError.missingPayload
         }
-        let family = try authorize(session: session, requireAdministrator: false)
         let payload = try FamilyShareStore.export(family: family, from: context)
         try await perform {
             try await transport.publish(familyID: family.id, payload: payload)
         }
         FamilyShareBaseline.remember(payload: payload, familyID: family.id)
+        FamilySharePublicationState.clearDirtyIfCurrent(
+            familyID: family.id,
+            publishedGeneration: publishedGeneration
+        )
+    }
+
+    func publishAfterLocalMutation(session: MutationSession) async throws {
+        guard ProcessInfo.processInfo.environment["UITEST_ISOLATED_STORE"] != "1" else { return }
+        let family = try authorize(session: session, requireAdministrator: false)
+        FamilySharePublicationState.markDirty(familyID: family.id)
+        try await publish(session: session)
+    }
+
+    func retryPendingPublication(session: MutationSession) async throws {
+        guard ProcessInfo.processInfo.environment["UITEST_ISOLATED_STORE"] != "1" else { return }
+        guard let family = session.family,
+              let dirtyIntent = FamilySharePublicationState.dirtyIntent(familyID: family.id) else { return }
+        switch dirtyIntent.authorization {
+        case .general:
+            _ = try authorize(session: session, requireAdministrator: false)
+        case .invitationRedemption(let authorization):
+            try authorizeInvitationRedemption(
+                authorization,
+                familyID: family.id,
+                session: session
+            )
+        }
+        try await publish(family: family, publishedGeneration: dirtyIntent.generation)
+    }
+
+    func prepareProtectedMutationPublication(session: MutationSession) throws -> PublicationIntent {
+        let family = try authorize(session: session, requireAdministrator: false)
+        return preparePublicationIntent(familyID: family.id)
+    }
+
+    func prepareInvitationRedemptionPublication(
+        code rawCode: String,
+        appleID rawAppleID: String,
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws -> PublicationIntent {
+        let code = rawCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        let invitations = try modelContext.fetch(FetchDescriptor<FamilyInvitation>()).filter {
+            $0.code.trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare(code) == .orderedSame &&
+                $0.isActivePending(at: now)
+        }
+        guard invitations.count == 1, let invitation = invitations.first else {
+            throw InvitationError.invalidOrExpired
+        }
+        let familyID = invitation.familyID
+        guard try modelContext.fetch(
+            FetchDescriptor<AllowanceFamily>(predicate: #Predicate { $0.id == familyID })
+        ).first?.isActive == true else {
+            throw InvitationError.familyUnavailable
+        }
+        let appleID = rawAppleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !appleID.isEmpty,
+              let role = FamilyMembershipRole(rawValue: invitation.roleRawValue) else {
+            throw InvitationError.invalidProfile
+        }
+        return preparePublicationIntent(
+            familyID: familyID,
+            authorization: .invitationRedemption(.init(
+                invitationID: invitation.id,
+                appleID: appleID,
+                roleRawValue: role.rawValue,
+                familyMemberID: invitation.familyMemberID
+            ))
+        )
+    }
+
+    private func preparePublicationIntent(
+        familyID: UUID,
+        authorization: FamilySharePublicationState.Authorization = .general
+    ) -> PublicationIntent {
+        let isEnabled = ProcessInfo.processInfo.environment["UITEST_ISOLATED_STORE"] != "1"
+        let previousDirtyIntent = isEnabled ? FamilySharePublicationState.dirtyIntent(familyID: familyID) : nil
+        let generation = isEnabled
+            ? FamilySharePublicationState.markDirty(familyID: familyID, authorization: authorization)
+            : 0
+        let intent = PublicationIntent(
+            id: UUID(),
+            familyID: familyID,
+            previousDirtyIntent: previousDirtyIntent,
+            generation: generation,
+            isEnabled: isEnabled
+        )
+        guard isEnabled else { return intent }
+        preparedPublicationIntentIDs[familyID, default: []].insert(intent.id)
+        return intent
+    }
+
+    func commitProtectedMutationPublication(_ intent: PublicationIntent, session: MutationSession) {
+        guard intent.isEnabled else { return }
+        guard authorizeCommittedIntent(intent, session: session) else {
+            preparedPublicationIntentIDs[intent.familyID]?.remove(intent.id)
+            lastError = FamilySharingError.notAuthorized.localizedDescription
+            return
+        }
+        preparedPublicationIntentIDs[intent.familyID]?.remove(intent.id)
+        schedulePendingPublication(familyID: intent.familyID, session: session)
+    }
+
+    func rollbackProtectedMutationPublication(_ intent: PublicationIntent) {
+        guard intent.isEnabled else { return }
+        preparedPublicationIntentIDs[intent.familyID]?.remove(intent.id)
+        if preparedPublicationIntentIDs[intent.familyID]?.isEmpty != false {
+            FamilySharePublicationState.restoreDirty(
+                familyID: intent.familyID,
+                replacingGeneration: intent.generation,
+                with: intent.previousDirtyIntent
+            )
+        }
+    }
+
+    private func authorizeCommittedIntent(_ intent: PublicationIntent, session: MutationSession) -> Bool {
+        guard let dirtyIntent = FamilySharePublicationState.dirtyIntent(familyID: intent.familyID),
+              dirtyIntent.generation == intent.generation else { return false }
+        switch dirtyIntent.authorization {
+        case .general:
+            return (try? authorize(session: session, requireAdministrator: false).id) == intent.familyID
+        case .invitationRedemption(let authorization):
+            return (try? authorizeInvitationRedemption(
+                authorization,
+                familyID: intent.familyID,
+                session: session
+            )) != nil
+        }
+    }
+
+    private func authorizeInvitationRedemption(
+        _ authorization: FamilySharePublicationState.InvitationRedemptionAuthorization,
+        familyID: UUID,
+        session: MutationSession
+    ) throws {
+        guard let context = modelContainer?.mainContext,
+              let appleID = session.appleID,
+              let family = session.family,
+              let membership = session.membership,
+              let member = session.member,
+              appleID == authorization.appleID,
+              family.id == familyID, family.isActive,
+              membership.familyID == familyID,
+              membership.appleID == authorization.appleID,
+              membership.roleRawValue == authorization.roleRawValue,
+              membership.familyMemberID == member.id,
+              member.familyID == familyID, member.isActive,
+              authorization.familyMemberID == nil || authorization.familyMemberID == member.id,
+              membership.role.isCompatible(with: member.role) else {
+            throw FamilySharingError.notAuthorized
+        }
+        let invitationID = authorization.invitationID
+        let storedInvitations = try context.fetch(
+            FetchDescriptor<FamilyInvitation>(predicate: #Predicate { $0.id == invitationID })
+        )
+        let membershipID = membership.id
+        let storedMemberships = try context.fetch(
+            FetchDescriptor<FamilyMembership>(predicate: #Predicate { $0.id == membershipID })
+        )
+        guard storedInvitations.count == 1, let invitation = storedInvitations.first,
+              invitation.familyID == familyID,
+              invitation.status == .accepted,
+              invitation.roleRawValue == authorization.roleRawValue,
+              invitation.familyMemberID == authorization.familyMemberID,
+              storedMemberships.count == 1, let storedMembership = storedMemberships.first,
+              storedMembership.familyID == familyID,
+              storedMembership.appleID == authorization.appleID,
+              storedMembership.roleRawValue == authorization.roleRawValue,
+              storedMembership.familyMemberID == member.id else {
+            throw FamilySharingError.notAuthorized
+        }
+    }
+
+    @discardableResult
+    func performProtectedMutation<T>(
+        session: MutationSession,
+        _ mutation: () throws -> T
+    ) throws -> T {
+        let intent = try prepareProtectedMutationPublication(session: session)
+        do {
+            let result = try mutation()
+            commitProtectedMutationPublication(intent, session: session)
+            return result
+        } catch {
+            rollbackProtectedMutationPublication(intent)
+            throw error
+        }
     }
 
     func publishAfterProtectedMutation(session: MutationSession) {
-        guard ProcessInfo.processInfo.environment["UITEST_ISOLATED_STORE"] != "1" else { return }
-        pendingPublishTask?.cancel()
-        pendingPublishTask = Task { @MainActor in
+        do {
+            let intent = try prepareProtectedMutationPublication(session: session)
+            commitProtectedMutationPublication(intent, session: session)
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    private func schedulePendingPublication(familyID: UUID, session: MutationSession) {
+        pendingPublishTasks[familyID]?.cancel()
+        let token = UUID()
+        pendingPublishTokens[familyID] = token
+        pendingPublishTasks[familyID] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if pendingPublishTokens[familyID] == token {
+                    pendingPublishTasks[familyID] = nil
+                    pendingPublishTokens[familyID] = nil
+                }
+            }
             do {
-                try await Task.sleep(for: .milliseconds(300))
+                try await Task.sleep(for: publicationDelay)
                 try Task.checkCancellation()
-                try await publish(session: session)
+                try await retryPendingPublication(session: session)
+                lastError = nil
             } catch is CancellationError {
                 return
             } catch FamilySharingError.familyNotPublished {
-                // A local-only family remains valid until an administrator creates a share.
+                // A local-only family remains dirty until an administrator creates a share.
+                lastError = nil
             } catch {
                 lastError = error.localizedDescription
             }
@@ -617,10 +864,76 @@ final class FamilySharingCoordinator: ObservableObject {
     func synchronize(session: MutationSession) async throws {
         _ = try await fetchSharedFamilies(session: session)
         do {
-            try await publish(session: session)
+            try await retryPendingPublication(session: session)
         } catch FamilySharingError.familyNotPublished {
-            // A local-only family has no explicit share to update yet.
+            // A local-only family remains dirty until an administrator creates a share.
         }
+    }
+
+    func hasConflict(for familyID: UUID?) -> Bool {
+        familyID.map(conflictingFamilyIDs.contains) == true
+    }
+
+    func resolveConflictKeepingLocal(session: MutationSession) async throws {
+        guard let context = modelContainer?.mainContext else {
+            throw FamilySharingError.missingPayload
+        }
+        let family = try authorize(session: session, requireAdministrator: false)
+        guard let fetched = pendingConflicts[family.id] else {
+            throw FamilySharingError.missingPayload
+        }
+        let remote = try FamilyShareStore.decodeAndValidate(fetched.data)
+        guard remote.familyID == family.id,
+              Self.isEligible(payload: remote, session: session, signedInAppleID: nil, invitationCode: nil) else {
+            throw FamilySharingError.unauthorizedSharedFamily
+        }
+        let localPayload = try FamilyShareStore.export(family: family, from: context)
+        let publishedGeneration = FamilySharePublicationState.markDirty(familyID: family.id)
+        try await perform {
+            try await transport.resolveConflictKeepingLocal(fetched, payload: localPayload)
+        }
+        FamilyShareBaseline.remember(payload: localPayload, familyID: family.id)
+        FamilySharePublicationState.clearDirtyIfCurrent(
+            familyID: family.id,
+            publishedGeneration: publishedGeneration
+        )
+        clearConflict(familyID: family.id)
+    }
+
+    func resolveConflictUsingCloudCopy(session: MutationSession) async throws {
+        guard Self.isValidFetchSession(session),
+              let family = session.family,
+              let fetched = pendingConflicts[family.id],
+              let context = modelContainer?.mainContext else {
+            throw FamilySharingError.notAuthorized
+        }
+        let resolvingGeneration = FamilySharePublicationState.dirtyIntent(familyID: family.id)?.generation
+        let remote = try FamilyShareStore.decodeAndValidate(fetched.data)
+        guard remote.familyID == fetched.familyID,
+              remote.familyID == family.id,
+              Self.isEligible(payload: remote, session: session, signedInAppleID: nil, invitationCode: nil) else {
+            throw FamilySharingError.unauthorizedSharedFamily
+        }
+        try await perform {
+            let canonicalRemoteData = try FamilyShareStore.replaceWithRemoteCopy(fetched.data, into: context)
+            do {
+                try await transport.acknowledgeFetchedPayload(fetched)
+            } catch {
+                FamilySharePublicationState.markDirty(familyID: family.id)
+                throw error
+            }
+            FamilyShareBaseline.remember(payload: canonicalRemoteData, familyID: family.id)
+        }
+        FamilySharePublicationState.clearDirtyIfCurrent(
+            familyID: family.id,
+            publishedGeneration: resolvingGeneration
+        )
+        clearConflict(familyID: family.id)
+    }
+
+    private func clearConflict(familyID: UUID) {
+        pendingConflicts[familyID] = nil
+        conflictingFamilyIDs.remove(familyID)
     }
 
     @discardableResult
@@ -639,10 +952,13 @@ final class FamilySharingCoordinator: ObservableObject {
             throw FamilySharingError.missingPayload
         }
         return try await perform {
-            let data = try await transport.fetchSharedPayloads()
+            let fetchedPayloads = try await transport.fetchSharedPayloads()
             var imported: [UUID] = []
-            for value in data {
-                let payload = try FamilyShareStore.decodeAndValidate(value)
+            for fetched in fetchedPayloads {
+                let payload = try FamilyShareStore.decodeAndValidate(fetched.data)
+                guard payload.familyID == fetched.familyID else {
+                    throw FamilySharingError.fetchedRecordMismatch
+                }
                 guard Self.isEligible(
                     payload: payload,
                     session: session,
@@ -651,7 +967,16 @@ final class FamilySharingCoordinator: ObservableObject {
                 ) else {
                     continue
                 }
-                imported.append(try FamilyShareStore.importPayload(value, into: context))
+                do {
+                    let familyID = try FamilyShareStore.importPayload(fetched.data, into: context)
+                    try await transport.acknowledgeFetchedPayload(fetched)
+                    clearConflict(familyID: familyID)
+                    imported.append(familyID)
+                } catch FamilySharingError.localAndRemoteChangesConflict {
+                    pendingConflicts[fetched.familyID] = fetched
+                    conflictingFamilyIDs.insert(fetched.familyID)
+                    throw FamilySharingError.localAndRemoteChangesConflict
+                }
             }
             return imported
         }
@@ -700,7 +1025,7 @@ final class FamilySharingCoordinator: ObservableObject {
               family.isActive, member.isActive,
               membership.appleID == appleID, membership.familyID == family.id,
               member.familyID == family.id, membership.familyMemberID == member.id,
-              (membership.role == .viewer || familyShareProfileRole(for: membership.role) == member.role) else {
+              membership.role.isCompatible(with: member.role) else {
             return false
         }
         return true
@@ -718,7 +1043,7 @@ final class FamilySharingCoordinator: ObservableObject {
               membership.familyMemberID == member.id,
               member.isActive,
               membership.role != .viewer,
-              familyShareProfileRole(for: membership.role) == member.role,
+              membership.role.profileRole == member.role,
               !requireAdministrator || membership.role.canAdministerFamily else {
             throw FamilySharingError.notAuthorized
         }
@@ -726,6 +1051,10 @@ final class FamilySharingCoordinator: ObservableObject {
     }
 
     private func perform<T>(_ operation: () async throws -> T) async throws -> T {
+        while isSynchronizing {
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(25))
+        }
         isSynchronizing = true
         defer { isSynchronizing = false }
         do {
@@ -825,6 +1154,36 @@ final class CloudKitFamilyShareTransport: FamilyShareTransport {
         throw FamilySharingError.familyNotPublished
     }
 
+    func resolveConflictKeepingLocal(_ fetched: FetchedFamilySharePayload, payload: Data) async throws {
+        let familyID = fetched.familyID
+        for database in [container.privateCloudDatabase, container.sharedCloudDatabase] {
+            for zone in try await database.allRecordZones()
+                where zone.zoneID.zoneName == "Family-\(familyID.uuidString)" {
+                let id = CKRecord.ID(recordName: familyID.uuidString, zoneID: zone.zoneID)
+                do {
+                    let record = try await database.record(for: id)
+                    guard record.recordChangeTag == fetched.changeTag else {
+                        throw FamilySharingError.conflictingChange
+                    }
+                    let assetURL = try apply(payload: payload, familyID: familyID, to: record)
+                    defer { try? FileManager.default.removeItem(at: assetURL) }
+                    let result = try await database.modifyRecords(
+                        saving: [record], deleting: [],
+                        savePolicy: .ifServerRecordUnchanged, atomically: true
+                    )
+                    guard let saved = try result.saveResults[id]?.get() else {
+                        throw FamilySharingError.missingPayload
+                    }
+                    rememberChangeTag(saved.recordChangeTag, familyID: familyID)
+                    return
+                } catch let error as CKError where error.code == .serverRecordChanged {
+                    throw FamilySharingError.conflictingChange
+                }
+            }
+        }
+        throw FamilySharingError.familyNotPublished
+    }
+
     func accept(_ metadata: CKShare.Metadata) async throws {
         let operation = CKAcceptSharesOperation(shareMetadatas: [metadata])
         try await withCheckedThrowingContinuation { continuation in
@@ -833,8 +1192,8 @@ final class CloudKitFamilyShareTransport: FamilyShareTransport {
         }
     }
 
-    func fetchSharedPayloads() async throws -> [Data] {
-        var payloadsByFamily: [UUID: Data] = [:]
+    func fetchSharedPayloads() async throws -> [FetchedFamilySharePayload] {
+        var payloadsByFamily: [UUID: FetchedFamilySharePayload] = [:]
         for database in [container.privateCloudDatabase, container.sharedCloudDatabase] {
             for zone in try await database.allRecordZones()
                 where zone.zoneID.zoneName.hasPrefix("Family-") {
@@ -842,18 +1201,30 @@ final class CloudKitFamilyShareTransport: FamilyShareTransport {
                 guard let familyID = UUID(uuidString: recordName) else { continue }
                 let recordID = CKRecord.ID(recordName: familyID.uuidString, zoneID: zone.zoneID)
                 let record = try await database.record(for: recordID)
+                guard record.recordType == "SharedFamily",
+                      record["familyID"] as? String == familyID.uuidString,
+                      record["schemaVersion"] as? Int64 == Int64(FamilySharePayload.currentSchemaVersion) else {
+                    throw FamilySharingError.fetchedRecordMismatch
+                }
                 guard let asset = record["payload"] as? CKAsset,
                       let url = asset.fileURL,
                       FileManager.default.fileExists(atPath: url.path) else {
                     throw FamilySharingError.missingPayload
                 }
-                payloadsByFamily[familyID] = try Data(contentsOf: url)
-                rememberChangeTag(record.recordChangeTag, familyID: familyID)
+                payloadsByFamily[familyID] = FetchedFamilySharePayload(
+                    familyID: familyID,
+                    data: try Data(contentsOf: url),
+                    changeTag: record.recordChangeTag
+                )
             }
         }
         return payloadsByFamily.keys
             .sorted { $0.uuidString < $1.uuidString }
             .compactMap { payloadsByFamily[$0] }
+    }
+
+    func acknowledgeFetchedPayload(_ payload: FetchedFamilySharePayload) async throws {
+        rememberChangeTag(payload.changeTag, familyID: payload.familyID)
     }
 
     private func requireCurrentChangeTag(for record: CKRecord, familyID: UUID) throws {
@@ -970,6 +1341,22 @@ enum FamilyShareStore {
         }
     }
 
+    static func replaceWithRemoteCopy(_ data: Data, into context: ModelContext) throws -> Data {
+        let payload = try decodeAndValidate(data)
+        let canonicalRemoteData = try JSONEncoder.familyShare.encode(payload)
+        let snapshot = try LocalSnapshot(context: context)
+        try snapshot.validateNoForeignCollisions(with: payload)
+        do {
+            try upsert(payload, into: context, snapshot: snapshot)
+            reconcileLocalFamily(with: payload, in: context, snapshot: snapshot)
+            try context.save()
+            return canonicalRemoteData
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
     private static func reconcileLocalFamily(
         with payload: FamilySharePayload,
         in context: ModelContext,
@@ -1042,10 +1429,15 @@ enum FamilyShareStore {
                 value.isActive = item.isActive
             } else {
                 context.insert(FamilyMember(
-                    id: item.id, familyID: item.familyID, name: item.name,
-                    emailAddress: item.emailAddress, birthDate: item.birthDate,
-                    sourceContactIdentifier: item.sourceContactIdentifier, avatarData: item.avatarData,
-                    role: try required(MemberRole(rawValue: item.roleRawValue)), isActive: item.isActive
+                    id: item.id,
+                    familyID: item.familyID,
+                    name: item.name,
+                    emailAddress: item.emailAddress,
+                    birthDate: item.birthDate,
+                    sourceContactIdentifier: item.sourceContactIdentifier,
+                    avatarData: item.avatarData,
+                    role: try required(MemberRole(rawValue: item.roleRawValue)),
+                    isActive: item.isActive
                 ))
             }
         }
@@ -1250,6 +1642,94 @@ enum FamilyShareStore {
             }
             guard !hasCollision else { throw FamilySharingError.foreignIdentifierCollision }
         }
+    }
+}
+
+enum FamilySharePublicationState {
+    struct InvitationRedemptionAuthorization: Codable, Equatable {
+        let invitationID: UUID
+        let appleID: String
+        let roleRawValue: String
+        let familyMemberID: UUID?
+    }
+
+    enum Authorization: Codable, Equatable {
+        case general
+        case invitationRedemption(InvitationRedemptionAuthorization)
+    }
+
+    struct DirtyIntent: Codable, Equatable {
+        let generation: Int
+        let authorization: Authorization
+    }
+
+    private static let dirtyKeyPrefix = "FamilySharePublicationDirty."
+    private static let intentKeyPrefix = "FamilySharePublicationIntent."
+    private static let generationKeyPrefix = "FamilySharePublicationGeneration."
+
+    static func isDirty(familyID: UUID) -> Bool {
+        dirtyIntent(familyID: familyID) != nil
+    }
+
+    static func dirtyIntent(familyID: UUID) -> DirtyIntent? {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: intentKeyPrefix + familyID.uuidString),
+           let intent = try? JSONDecoder().decode(DirtyIntent.self, from: data) {
+            return intent
+        }
+        guard defaults.bool(forKey: dirtyKeyPrefix + familyID.uuidString) else { return nil }
+        let migrated = DirtyIntent(
+            generation: max(1, defaults.integer(forKey: generationKeyPrefix + familyID.uuidString)),
+            authorization: .general
+        )
+        persist(migrated, familyID: familyID)
+        return migrated
+    }
+
+    @discardableResult
+    static func markDirty(
+        familyID: UUID,
+        authorization: Authorization = .general
+    ) -> Int {
+        let defaults = UserDefaults.standard
+        let generation = max(
+            dirtyIntent(familyID: familyID)?.generation ?? 0,
+            defaults.integer(forKey: generationKeyPrefix + familyID.uuidString)
+        ) + 1
+        defaults.set(generation, forKey: generationKeyPrefix + familyID.uuidString)
+        persist(DirtyIntent(generation: generation, authorization: authorization), familyID: familyID)
+        return generation
+    }
+
+    static func clearDirty(familyID: UUID) {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: dirtyKeyPrefix + familyID.uuidString)
+        defaults.removeObject(forKey: intentKeyPrefix + familyID.uuidString)
+    }
+
+    static func clearDirtyIfCurrent(familyID: UUID, publishedGeneration: Int?) {
+        guard dirtyIntent(familyID: familyID)?.generation == publishedGeneration else { return }
+        clearDirty(familyID: familyID)
+    }
+
+    static func restoreDirty(
+        familyID: UUID,
+        replacingGeneration: Int,
+        with previousIntent: DirtyIntent?
+    ) {
+        guard dirtyIntent(familyID: familyID)?.generation == replacingGeneration else { return }
+        if let previousIntent {
+            persist(previousIntent, familyID: familyID)
+        } else {
+            clearDirtyIfCurrent(familyID: familyID, publishedGeneration: replacingGeneration)
+        }
+    }
+
+    private static func persist(_ intent: DirtyIntent, familyID: UUID) {
+        guard let data = try? JSONEncoder().encode(intent) else { return }
+        let defaults = UserDefaults.standard
+        defaults.set(true, forKey: dirtyKeyPrefix + familyID.uuidString)
+        defaults.set(data, forKey: intentKeyPrefix + familyID.uuidString)
     }
 }
 

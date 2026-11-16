@@ -35,34 +35,41 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
         defaultName: String,
         modelContext: ModelContext
     ) throws -> FamilyMember {
-        if let memberID = membership.familyMemberID,
-           let existing = try modelContext.fetch(
-            FetchDescriptor<FamilyMember>(predicate: #Predicate { $0.id == memberID })
-           ).first {
+        let linkedMember: FamilyMember?
+        if let memberID = membership.familyMemberID {
+            linkedMember = try modelContext.fetch(
+                FetchDescriptor<FamilyMember>(predicate: #Predicate { $0.id == memberID })
+            ).first
+        } else {
+            linkedMember = nil
+        }
+
+        switch try ProfileRestorationPolicy.validate(
+            membership: membership,
+            family: family,
+            linkedMember: linkedMember
+        ) {
+        case .useExisting(let existing):
             let hasLegacyPlaceholderBirthdate = existing.role != .child &&
                 existing.birthDate.map { abs($0.timeIntervalSince(membership.joinedAt)) < 60 } == true
-            if existing.familyID != family.id || !existing.isActive || hasLegacyPlaceholderBirthdate {
-                existing.familyID = family.id
-                existing.isActive = true
-                if hasLegacyPlaceholderBirthdate {
-                    existing.birthDate = nil
-                }
+            if hasLegacyPlaceholderBirthdate {
+                existing.birthDate = nil
                 try modelContext.save()
             }
             currentFamilyMember = existing
             return existing
+        case .create(let role):
+            let member = FamilyMember(
+                familyID: family.id,
+                name: defaultName,
+                role: role
+            )
+            modelContext.insert(member)
+            membership.familyMemberID = member.id
+            try modelContext.save()
+            currentFamilyMember = member
+            return member
         }
-
-        let member = FamilyMember(
-            familyID: family.id,
-            name: defaultName,
-            role: membership.role.profileRole
-        )
-        modelContext.insert(member)
-        membership.familyMemberID = member.id
-        try modelContext.save()
-        currentFamilyMember = member
-        return member
     }
 
     func createFamily(
@@ -108,7 +115,24 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
         familyMemberID: UUID? = nil,
         modelContext: ModelContext
     ) throws -> FamilyInvitation {
-        let existingCodes = Set(try modelContext.fetch(FetchDescriptor<FamilyInvitation>()).map(\.code))
+        guard family.isActive else { throw InvitationError.familyUnavailable }
+        if let familyMemberID {
+            let member = try modelContext.fetch(
+                FetchDescriptor<FamilyMember>(predicate: #Predicate { $0.id == familyMemberID })
+            ).first
+            guard let member,
+                  member.familyID == family.id,
+                  member.isActive,
+                  role.isCompatible(with: member.role) else {
+                throw InvitationError.invalidProfile
+            }
+        } else if role == .child || role == .viewer {
+            throw InvitationError.profileRequired
+        }
+
+        let existingCodes = Set(try modelContext.fetch(FetchDescriptor<FamilyInvitation>()).map {
+            $0.code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        })
         let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
         var code: String
         repeat {
@@ -180,6 +204,13 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
         role: MemberRole,
         modelContext: ModelContext
     ) throws {
+        guard member.isActive else { throw FamilyMemberError.inactiveMember }
+        try validateLinkedRecords(
+            for: member,
+            proposedRole: role,
+            deactivating: false,
+            modelContext: modelContext
+        )
         try validateBirthDate(birthDate, for: role)
         try validateUniqueMember(
             familyID: member.familyID,
@@ -252,7 +283,67 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
         _ member: FamilyMember,
         modelContext: ModelContext
     ) throws {
+        guard member.isActive else { throw FamilyMemberError.inactiveMember }
+        try validateLinkedRecords(
+            for: member,
+            proposedRole: member.role,
+            deactivating: true,
+            modelContext: modelContext
+        )
         member.isActive = false
+        try modelContext.save()
+    }
+
+    private func validateLinkedRecords(
+        for member: FamilyMember,
+        proposedRole: MemberRole,
+        deactivating: Bool,
+        modelContext: ModelContext,
+        now: Date = .now
+    ) throws {
+        let memberID = member.id
+        let familyID = member.familyID
+        let linkedMemberships = try modelContext.fetch(FetchDescriptor<FamilyMembership>()).filter {
+            $0.familyID == familyID && $0.familyMemberID == memberID
+        }
+        let linkedPendingInvitations = try modelContext.fetch(FetchDescriptor<FamilyInvitation>()).filter {
+            $0.familyID == familyID && $0.familyMemberID == memberID && $0.isActivePending(at: now)
+        }
+        if deactivating {
+            if linkedMemberships.contains(where: { $0.role.canAdministerFamily }) {
+                throw FamilyMemberError.administratorProfileRequired
+            }
+            if !linkedMemberships.isEmpty { throw FamilyMemberError.linkedMembership }
+            if !linkedPendingInvitations.isEmpty { throw FamilyMemberError.pendingInvitation }
+        }
+        guard linkedMemberships.allSatisfy({ $0.role.isCompatible(with: proposedRole) }),
+              linkedPendingInvitations.allSatisfy({ $0.role.isCompatible(with: proposedRole) }) else {
+            throw FamilyMemberError.roleInUse
+        }
+    }
+
+    func revokeInvitation(
+        _ invitation: FamilyInvitation,
+        in family: AllowanceFamily,
+        session: MutationSession,
+        modelContext: ModelContext
+    ) throws {
+        let targetMember: FamilyMember?
+        if let memberID = invitation.familyMemberID {
+            targetMember = try modelContext.fetch(
+                FetchDescriptor<FamilyMember>(predicate: #Predicate { $0.id == memberID })
+            ).first
+        } else {
+            targetMember = nil
+        }
+        try ProtectedMutationPolicy.authorizeInvitationAdministration(
+            session: session,
+            targetFamily: family,
+            targetMember: targetMember,
+            targetInvitation: invitation
+        )
+        guard invitation.status == .pending else { throw InvitationError.notPending }
+        invitation.status = .revoked
         try modelContext.save()
     }
 
@@ -262,51 +353,84 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
         appleID: String,
         modelContext: ModelContext
     ) throws -> (family: AllowanceFamily, membership: FamilyMembership, member: FamilyMember?) {
-        let code = rawCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        let pendingStatus = InvitationStatus.pending.rawValue
-        let invitation = try modelContext.fetch(
-            FetchDescriptor<FamilyInvitation>(predicate: #Predicate {
-                $0.code == code && $0.statusRawValue == pendingStatus
-            })
-        ).first
-
-        guard let invitation else {
+        let code = rawCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pendingInvitations = try modelContext.fetch(FetchDescriptor<FamilyInvitation>()).filter {
+            $0.status == .pending &&
+                $0.code.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .caseInsensitiveCompare(code) == .orderedSame
+        }
+        guard pendingInvitations.count == 1, let invitation = pendingInvitations.first else {
             throw InvitationError.invalidOrExpired
         }
-        if let expiresAt = invitation.expiresAt, expiresAt < .now {
+        if !invitation.isActivePending(at: .now) {
             invitation.status = .revoked
             try modelContext.save()
             throw InvitationError.invalidOrExpired
         }
 
         let familyID = invitation.familyID
-        let family = try modelContext.fetch(
+        guard let family = try modelContext.fetch(
             FetchDescriptor<AllowanceFamily>(predicate: #Predicate { $0.id == familyID })
-        ).first
-        guard let family else { throw InvitationError.familyUnavailable }
+        ).first, family.isActive else {
+            throw InvitationError.familyUnavailable
+        }
+        guard let invitationRole = FamilyMembershipRole(rawValue: invitation.roleRawValue) else {
+            throw InvitationError.invalidProfile
+        }
 
         let existing = try modelContext.fetch(
             FetchDescriptor<FamilyMembership>(predicate: #Predicate {
                 $0.familyID == familyID && $0.appleID == appleID
             })
-        ).first
+        )
+        guard existing.count <= 1 else { throw InvitationError.membershipConflict }
+        if let existing = existing.first {
+            guard existing.roleRawValue == invitation.roleRawValue,
+                  invitation.familyMemberID == nil || invitation.familyMemberID == existing.familyMemberID else {
+                throw InvitationError.membershipConflict
+            }
+        }
 
-        let membership = existing ?? FamilyMembership(
+        let membership = existing.first ?? FamilyMembership(
             familyID: invitation.familyID,
             familyMemberID: invitation.familyMemberID,
             appleID: appleID,
-            role: invitation.role
+            role: invitationRole
         )
-        if existing == nil { modelContext.insert(membership) }
-        invitation.status = .accepted
-
-        var member: FamilyMember?
-        if let memberID = invitation.familyMemberID {
-            member = try modelContext.fetch(
-                FetchDescriptor<FamilyMember>(predicate: #Predicate { $0.id == memberID })
-            ).first
+        let linkedMemberID = invitation.familyMemberID ?? membership.familyMemberID
+        let member: FamilyMember
+        if let linkedMemberID {
+            guard let linkedMember = try modelContext.fetch(
+                FetchDescriptor<FamilyMember>(predicate: #Predicate { $0.id == linkedMemberID })
+            ).first,
+                  linkedMember.familyID == family.id,
+                  linkedMember.isActive,
+                  invitationRole.isCompatible(with: linkedMember.role) else {
+                throw InvitationError.invalidProfile
+            }
+            member = linkedMember
+            membership.familyMemberID = linkedMember.id
+        } else {
+            guard invitationRole != .child, invitationRole != .viewer else {
+                throw InvitationError.profileRequired
+            }
+            member = FamilyMember(
+                familyID: family.id,
+                name: invitationRole.title,
+                role: invitationRole.profileRole
+            )
+            modelContext.insert(member)
+            membership.familyMemberID = member.id
         }
-        try modelContext.save()
+
+        if existing.isEmpty { modelContext.insert(membership) }
+        invitation.status = .accepted
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
         establishSession(appleID: appleID, family: family, membership: membership, member: member)
         return (family, membership, member)
     }
@@ -414,14 +538,91 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
     }
 }
 
+enum ProfileRestorationPolicy {
+    enum Decision {
+        case useExisting(FamilyMember)
+        case create(MemberRole)
+    }
+
+    static func validate(
+        membership: FamilyMembership,
+        family: AllowanceFamily,
+        linkedMember: FamilyMember?
+    ) throws -> Decision {
+        guard family.isActive else { throw ProfileRestorationError.inactiveFamily }
+        guard membership.familyID == family.id else {
+            throw ProfileRestorationError.membershipFamilyMismatch
+        }
+        guard let role = FamilyMembershipRole(rawValue: membership.roleRawValue) else {
+            throw ProfileRestorationError.roleProfileMismatch
+        }
+        guard let linkedMemberID = membership.familyMemberID else {
+            guard linkedMember == nil else { throw ProfileRestorationError.linkedMemberMismatch }
+            guard role != .child, role != .viewer else {
+                throw ProfileRestorationError.linkedMemberUnavailable
+            }
+            return .create(role.profileRole)
+        }
+        guard let linkedMember else { throw ProfileRestorationError.linkedMemberUnavailable }
+        guard linkedMember.id == linkedMemberID else {
+            throw ProfileRestorationError.linkedMemberMismatch
+        }
+        guard linkedMember.familyID == family.id else {
+            throw ProfileRestorationError.memberFamilyMismatch
+        }
+        guard linkedMember.isActive else { throw ProfileRestorationError.inactiveMember }
+        guard role.isCompatible(with: linkedMember.role) else {
+            throw ProfileRestorationError.roleProfileMismatch
+        }
+        return .useExisting(linkedMember)
+    }
+}
+
+enum ProfileRestorationError: LocalizedError, Equatable {
+    case inactiveFamily
+    case membershipFamilyMismatch
+    case linkedMemberUnavailable
+    case linkedMemberMismatch
+    case memberFamilyMismatch
+    case inactiveMember
+    case roleProfileMismatch
+
+    var errorDescription: String? {
+        switch self {
+        case .inactiveFamily:
+            "The selected family is inactive. No profile was changed."
+        case .membershipFamilyMismatch:
+            "This membership belongs to a different family. No profile was changed."
+        case .linkedMemberUnavailable:
+            "The membership's linked profile is missing. No profile was changed."
+        case .linkedMemberMismatch:
+            "The membership does not link to the supplied profile. No profile was changed."
+        case .memberFamilyMismatch:
+            "The linked profile belongs to a different family. No profile was changed."
+        case .inactiveMember:
+            "The linked profile is inactive and cannot be restored automatically."
+        case .roleProfileMismatch:
+            "The membership role does not match the linked profile. No profile was changed."
+        }
+    }
+}
+
 enum InvitationError: LocalizedError {
     case invalidOrExpired
     case familyUnavailable
+    case invalidProfile
+    case profileRequired
+    case membershipConflict
+    case notPending
 
     var errorDescription: String? {
         switch self {
         case .invalidOrExpired: "That invitation code is invalid or has expired."
         case .familyUnavailable: "That family is no longer available."
+        case .invalidProfile: "The invitation's family profile is invalid or inactive."
+        case .profileRequired: "A child or viewer invitation must be linked to an existing child profile."
+        case .membershipConflict: "This Apple ID already has a different membership in this family."
+        case .notPending: "This invitation is no longer pending."
         }
     }
 }
@@ -429,11 +630,21 @@ enum InvitationError: LocalizedError {
 enum FamilyMemberError: LocalizedError {
     case childBirthdateRequired
     case duplicateMember(String)
+    case inactiveMember
+    case linkedMembership
+    case pendingInvitation
+    case administratorProfileRequired
+    case roleInUse
 
     var errorDescription: String? {
         switch self {
         case .childBirthdateRequired: "A birthdate is required for a child profile."
         case .duplicateMember(let name): "\(name) is already in this family."
+        case .inactiveMember: "An inactive family profile cannot be changed."
+        case .linkedMembership: "This profile is linked to an active family membership and cannot be deactivated."
+        case .pendingInvitation: "Revoke the pending invitation before deactivating this profile."
+        case .administratorProfileRequired: "The family administrator's profile cannot be deactivated."
+        case .roleInUse: "The new profile role is incompatible with a linked membership or pending invitation."
         }
     }
 }
@@ -448,15 +659,5 @@ private extension String {
         split(whereSeparator: { $0.isWhitespace })
             .joined(separator: " ")
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-    }
-}
-
-private extension FamilyMembershipRole {
-    var profileRole: MemberRole {
-        switch self {
-        case .familyAdmin, .owner, .parent: .parent
-        case .caregiver: .caregiver
-        case .child, .viewer: .child
-        }
     }
 }

@@ -182,12 +182,7 @@ struct SignInWithAppleView: View {
 
             if let membership = memberships.first(where: { $0.appleID == appleID }),
                let family = families.first(where: { $0.id == membership.familyID }) {
-                appleIDManager.establishSession(
-                    appleID: appleID,
-                    family: family,
-                    membership: membership
-                )
-                restoreProfile(for: membership, in: family)
+                establishExistingSession(appleID: appleID, membership: membership, family: family)
             }
         }
     }
@@ -213,25 +208,36 @@ struct SignInWithAppleView: View {
 
         if let membership = memberships.first(where: { $0.appleID == appleID }),
            let family = families.first(where: { $0.id == membership.familyID }) {
-            appleIDManager.establishSession(
-                appleID: appleID,
-                family: family,
-                membership: membership
-            )
-            restoreProfile(for: membership, in: family)
+            establishExistingSession(appleID: appleID, membership: membership, family: family)
         }
     }
     #endif
     #endif
 
-    private func restoreProfile(for membership: FamilyMembership, in family: AllowanceFamily) {
+    private func establishExistingSession(
+        appleID: String,
+        membership: FamilyMembership,
+        family: AllowanceFamily
+    ) {
         do {
-            _ = try appleIDManager.ensureProfile(
+            let member = try appleIDManager.ensureProfile(
                 for: membership,
                 in: family,
                 defaultName: membership.role.title,
                 modelContext: modelContext
             )
+            appleIDManager.establishSession(
+                appleID: appleID,
+                family: family,
+                membership: membership,
+                member: member
+            )
+            errorMessage = nil
+            Task { @MainActor in
+                try? await FamilySharingCoordinator.shared.retryPendingPublication(
+                    session: MutationSession(appleIDManager: appleIDManager)
+                )
+            }
         } catch {
             errorMessage = "Your member profile could not be restored: \(error.localizedDescription)"
         }
@@ -265,25 +271,28 @@ struct SignInWithAppleView: View {
                         invitationCode: code
                     )
                 }
-                try appleIDManager.acceptInvitation(
+                let intent = try FamilySharingCoordinator.shared.prepareInvitationRedemptionPublication(
                     code: code,
                     appleID: appleID,
                     modelContext: modelContext
                 )
+                do {
+                    try appleIDManager.acceptInvitation(
+                        code: code,
+                        appleID: appleID,
+                        modelContext: modelContext
+                    )
+                } catch {
+                    FamilySharingCoordinator.shared.rollbackProtectedMutationPublication(intent)
+                    throw error
+                }
+                FamilySharingCoordinator.shared.commitProtectedMutationPublication(
+                    intent,
+                    session: MutationSession(appleIDManager: appleIDManager)
+                )
                 showingJoin = false
                 invitationCode = ""
-                guard !usesIsolatedUITestStore else {
-                    errorMessage = nil
-                    return
-                }
-                do {
-                    try await FamilySharingCoordinator.shared.publish(
-                        session: MutationSession(appleIDManager: appleIDManager)
-                    )
-                    errorMessage = nil
-                } catch {
-                    errorMessage = "The family was joined locally, but the new membership could not be published: \(error.localizedDescription)"
-                }
+                errorMessage = nil
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -378,13 +387,14 @@ struct FamilyInvitationView: View {
             Section("Invitation") {
                 Picker("Role", selection: $role) {
                     Text("Child").tag(FamilyMembershipRole.child)
+                    Text("Viewer").tag(FamilyMembershipRole.viewer)
                     Text("Parent").tag(FamilyMembershipRole.parent)
                     Text("Caregiver").tag(FamilyMembershipRole.caregiver)
                 }
 
-                if role == .child {
-                    Picker("Profile (optional)", selection: $selectedMemberID) {
-                        Text("Choose later").tag(nil as UUID?)
+                if role == .child || role == .viewer {
+                    Picker(role == .viewer ? "Viewer profile" : "Child profile", selection: $selectedMemberID) {
+                        Text("Select a child").tag(nil as UUID?)
                         ForEach(familyMembers.filter { $0.role == .child }) { member in
                             Text(member.name).tag(member.id as UUID?)
                         }
@@ -394,6 +404,7 @@ struct FamilyInvitationView: View {
                 Button("Generate invitation code") {
                     generateCode()
                 }
+                .disabled((role == .child || role == .viewer) && selectedMemberID == nil)
             }
 
             if let generatedCode {
@@ -420,12 +431,22 @@ struct FamilyInvitationView: View {
             return
         }
         do {
-            let invitation = try appleIDManager.createInvitation(
-                for: family,
-                role: role,
-                familyMemberID: role == .child ? selectedMemberID : nil,
-                modelContext: modelContext
+            let targetMember = selectedMemberID.flatMap { id in familyMembers.first { $0.id == id } }
+            try ProtectedMutationPolicy.authorizeInvitationAdministration(
+                session: MutationSession(appleIDManager: appleIDManager),
+                targetFamily: family,
+                targetMember: targetMember
             )
+            let invitation = try FamilySharingCoordinator.shared.performProtectedMutation(
+                session: MutationSession(appleIDManager: appleIDManager)
+            ) {
+                try appleIDManager.createInvitation(
+                    for: family,
+                    role: role,
+                    familyMemberID: role == .child || role == .viewer ? selectedMemberID : nil,
+                    modelContext: modelContext
+                )
+            }
             generatedCode = invitation.code
             errorMessage = nil
         } catch {

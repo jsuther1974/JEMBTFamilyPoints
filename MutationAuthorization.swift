@@ -65,6 +65,74 @@ enum ProtectedMutationPolicy {
         let member: FamilyMember
     }
 
+    static func authorizeFamilyAdministration(
+        session: MutationSession,
+        targetFamily: AllowanceFamily
+    ) throws {
+        let session = try validate(session)
+        guard session.role.canAdministerFamily else { throw ProtectedMutationError.notAuthorized }
+        guard targetFamily.id == session.familyID else { throw ProtectedMutationError.familyMismatch }
+    }
+
+    static func authorizeMemberAdministration(
+        session: MutationSession,
+        targetFamily: AllowanceFamily,
+        targetMember: FamilyMember? = nil
+    ) throws {
+        try authorizeFamilyAdministration(session: session, targetFamily: targetFamily)
+        if let targetMember, targetMember.familyID != targetFamily.id {
+            throw ProtectedMutationError.foreignRecipient
+        }
+    }
+
+    static func authorizeInvitationAdministration(
+        session: MutationSession,
+        targetFamily: AllowanceFamily,
+        targetMember: FamilyMember? = nil,
+        targetInvitation: FamilyInvitation? = nil
+    ) throws {
+        try authorizeMemberAdministration(
+            session: session,
+            targetFamily: targetFamily,
+            targetMember: targetMember
+        )
+        if let targetInvitation {
+            guard targetInvitation.familyID == targetFamily.id else {
+                throw ProtectedMutationError.familyMismatch
+            }
+            guard targetInvitation.familyMemberID == nil ||
+                    targetInvitation.familyMemberID == targetMember?.id else {
+                throw ProtectedMutationError.foreignRecipient
+            }
+        }
+    }
+
+    static func authorizeRuleManagement(
+        session: MutationSession,
+        targetRules: [RuleTemplate]
+    ) throws {
+        let session = try validate(session)
+        guard session.role.canManageRules, session.member.role == .parent else {
+            throw ProtectedMutationError.notAuthorized
+        }
+        guard targetRules.allSatisfy({ $0.familyID == session.familyID }) else {
+            throw ProtectedMutationError.foreignRule
+        }
+    }
+
+    static func authorizeLedgerEditing(
+        session: MutationSession,
+        entries: [LedgerEntry],
+        familyMemberIDs: Set<UUID>,
+        familyRuleIDs: Set<UUID>
+    ) throws {
+        let session = try validate(session)
+        guard session.role.canReviewLedger, session.member.role == .parent else {
+            throw ProtectedMutationError.notAuthorized
+        }
+        try validateEntries(entries, memberIDs: familyMemberIDs, ruleIDs: familyRuleIDs)
+    }
+
     static func activityApprovalStatus(
         session: MutationSession,
         recipient: FamilyMember,
@@ -187,12 +255,21 @@ enum ProtectedMutationPolicy {
         guard membership.familyID == family.id, member.familyID == family.id else {
             throw ProtectedMutationError.familyMismatch
         }
-        guard membership.familyMemberID == member.id else {
+        guard membership.familyMemberID == member.id,
+              expectedProfileRole(for: membership.role) == member.role else {
             throw ProtectedMutationError.profileMismatch
         }
         guard member.isActive else { throw ProtectedMutationError.inactiveProfile }
         guard membership.role != .viewer else { throw ProtectedMutationError.notAuthorized }
         return ValidatedSession(familyID: family.id, role: membership.role, member: member)
+    }
+
+    private static func expectedProfileRole(for role: FamilyMembershipRole) -> MemberRole {
+        switch role {
+        case .familyAdmin, .owner, .parent: .parent
+        case .caregiver: .caregiver
+        case .child, .viewer: .child
+        }
     }
 
     private static func validateEntries(

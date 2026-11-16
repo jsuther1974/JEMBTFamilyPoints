@@ -1,9 +1,8 @@
 # JEMBT Family Points Tracker
 
-Native SwiftUI starter for the Suguiluz family point system. The design replaces
-the spreadsheet's expanding weekly columns with an auditable ledger: every
-award, penalty, reward purchase, approval, parent-pot allocation, and weekly
-settlement is a dated record.
+Native SwiftUI starter for a fictional demo family point system. The design uses
+an auditable ledger: every award, penalty, reward purchase, approval, parent-pot
+allocation, and weekly settlement is a dated record.
 
 ## Project guidance
 
@@ -18,7 +17,7 @@ settlement is a dated record.
 ## First-version behavior
 
 - Supports iPhone and iPad with a shared SwiftUI codebase.
-- Seeds Mateo, Emilio, Daddy, and Papa from the existing spreadsheet.
+- Seeds two fictional child profiles and two fictional parent profiles for demo use.
 - Calculates each child's Saturday age and grants `age * 100` starting points.
 - Lets children submit activities for parent approval.
 - Lets parents approve, reject, or directly record entries.
@@ -38,7 +37,7 @@ A family administrator creates a family-specific custom CloudKit zone and `CKSha
 
 Production use still requires CloudKit schema deployment and signed physical-device verification with two different iCloud accounts. Automatic SwiftData private-database sync is not the cross-account sharing mechanism.
 
-## Create the Xcode project on a Mac
+## Create the Xcode project on a Mac
 
 1. In Xcode, create a new **Multiplatform App** named
    `JEMBTFamilyPointsTracker`.

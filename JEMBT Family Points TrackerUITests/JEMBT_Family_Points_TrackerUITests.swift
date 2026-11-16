@@ -8,7 +8,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testSimulatorRoleAccountsAreAvailable() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launch()
 
         let roleAccountMenu = app.buttons["Choose Simulator Role Account"]
@@ -22,7 +22,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testStorefrontReplacesRecordTabAndUsesFamilyName() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-store-brand-\(UUID().uuidString)@local"
         app.launch()
 
@@ -65,7 +65,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testCurrentMemberRowDoesNotShowInviteActions() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-current-member-\(UUID().uuidString)@local"
         app.launch()
 
@@ -80,7 +80,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testFamilyStorefrontOpensWithParentManagement() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launch()
 
         app.signInAndJoinDemoFamilyIfNeeded()
@@ -111,12 +111,15 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
         app.openFamilyTab()
         XCTAssertFalse(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'shop-'")).firstMatch.exists)
-        let mateoCard = app.buttons["memberCard-Mateo"]
-        XCTAssertTrue(mateoCard.waitForExistence(timeout: 5))
-        mateoCard.tap()
-        XCTAssertTrue(app.navigationBars["Mateo"].waitForExistence(timeout: 5))
+        let averyCard = app.descendants(matching: .any)["memberCard-Avery Example"]
+        for _ in 0..<4 where !averyCard.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(averyCard.waitForExistence(timeout: 5))
+        averyCard.tap()
+        XCTAssertTrue(app.navigationBars["Avery Example"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.descendants(matching: .any)["storefrontSign"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["memberDetailAvatar-Mateo"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["memberDetailAvatar-Avery Example"].exists)
         XCTAssertFalse(app.navigationBars["Send Invitation"].exists, "The card itself must not open invitation sharing.")
         XCTAssertTrue(app.staticTexts["Activity trends"].exists)
         app.buttons["Done"].tap()
@@ -132,7 +135,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testAddMemberShowsInviteReadySheetImmediately() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-admin-\(UUID().uuidString)@local"
         app.launchEnvironment["UITEST_DEFAULT_MEMBER_ROLE"] = "parent"
         app.launch()
@@ -145,7 +148,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testFamilyNameEditButtonOpensEditor() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-family-name-\(UUID().uuidString)@local"
         app.launch()
 
@@ -178,7 +181,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testReturnSubmitsCreateFamilyForm() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-create-return-\(UUID().uuidString)@local"
         app.launch()
 
@@ -209,7 +212,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testNewChildDoesNotShowFabricatedBirthdate() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-empty-birthday-\(UUID().uuidString)@local"
         app.launch()
 
@@ -225,7 +228,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testBirthdatePickerWaitsForExplicitConfirmation() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-birthday-confirmation-\(UUID().uuidString)@local"
         app.launch()
 
@@ -261,7 +264,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testAddMemberStartsWithNameFocused() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-member-focus-\(UUID().uuidString)@local"
         app.launch()
 
@@ -280,7 +283,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testAddMemberTabOrderIncludesRoleAndBirthdate() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-member-tabs-\(UUID().uuidString)@local"
         app.launch()
 
@@ -311,7 +314,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testRegularWidthAddMemberControlsRemainInteractiveAfterTextEntry() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-ipad-member-controls-\(UUID().uuidString)@local"
         app.launch()
 
@@ -352,7 +355,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testCaregiverCardDoesNotShowPoints() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-caregiver-card-\(UUID().uuidString)@local"
         app.launchEnvironment["UITEST_DEFAULT_MEMBER_ROLE"] = "caregiver"
         app.launch()
@@ -386,7 +389,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testFamilyPageShowsPointsInMemberCardsWithoutStandaloneWeekSection() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launch()
 
         app.signInAndJoinDemoFamilyIfNeeded()
@@ -395,15 +398,20 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         let reportingWeek = app.descendants(matching: .any)["reportingWeekPicker"]
         XCTAssertTrue(reportingWeek.waitForExistence(timeout: 5), "Expected the selected week to be visible and changeable on Family.")
 
-        let childPoints = app.staticTexts["pointsSummary-Mateo"]
-        XCTAssertTrue(childPoints.waitForExistence(timeout: 5), "Expected points in Mateo's member card.")
         let familyOverview = app.descendants(matching: .any)["familyOverviewBanner"]
         XCTAssertTrue(familyOverview.exists)
         XCTAssertTrue(app.descendants(matching: .any)["familyNameHeading"].exists)
         XCTAssertLessThan(app.staticTexts["Children"].frame.minY, 220, "The compact summary should leave room for member cards.")
 
-        let mateoCard = app.buttons["memberCard-Mateo"]
-        XCTAssertFalse(mateoCard.label.contains("Child"), "Expected the Children heading, not a role label in Mateo's card.")
+        let childPoints = app.descendants(matching: .any)["pointsSummary-Avery Example"]
+        for _ in 0..<4 where !childPoints.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(childPoints.waitForExistence(timeout: 5), "Expected points in Avery Example's member card.")
+
+        let averyCard = app.descendants(matching: .any)["memberCard-Avery Example"]
+        XCTAssertTrue(averyCard.exists)
+        XCTAssertFalse(averyCard.label.contains("Child"), "Expected the Children heading, not a role label in Avery Example's card.")
         XCTAssertFalse(app.tabBars.buttons["Dashboard"].exists)
     }
 
@@ -415,11 +423,11 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         app.signInAndJoinDemoFamilyIfNeeded()
         app.openFamilyTab()
 
-        let rewardMateo = app.buttons["Reward Mateo"]
-        let penalizeMateo = app.buttons["Penalize Mateo"]
-        XCTAssertTrue(rewardMateo.waitForExistence(timeout: 5))
-        XCTAssertTrue(penalizeMateo.exists)
-        rewardMateo.tap()
+        let rewardAvery = app.buttons["Reward Avery Example"]
+        let penalizeAvery = app.buttons["Penalize Avery Example"]
+        XCTAssertTrue(rewardAvery.waitForExistence(timeout: 5))
+        XCTAssertTrue(penalizeAvery.exists)
+        rewardAvery.tap()
 
         let saveButton = app.navigationBars.buttons["Save"]
         XCTAssertTrue(app.navigationBars.buttons["Cancel"].waitForExistence(timeout: 5))
@@ -494,14 +502,14 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Weekly Ledger"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["reportingWeekPicker"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["weeklyLedgerHeader"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.descendants(matching: .any)["ledgerStartingValue-Mateo"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["ledgerStartingValue-Avery Example"].waitForExistence(timeout: 5))
 
         let dayRows = app.descendants(matching: .any).matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "ledgerDay-Mateo-")
+            NSPredicate(format: "identifier BEGINSWITH %@", "ledgerDay-Avery Example-")
         )
         let dayRowCount = dayRows.count
         XCTAssertGreaterThanOrEqual(dayRowCount, 2, "Expected one collapsed row for each active day.")
-        let dishesRows = app.descendants(matching: .any).matching(identifier: "ledgerSummary-Mateo-Wash the dishes")
+        let dishesRows = app.descendants(matching: .any).matching(identifier: "ledgerSummary-Avery Example-Wash the dishes")
         for index in 0..<dayRowCount {
             let dayRow = dayRows.element(boundBy: index)
             XCTAssertTrue(dayRow.waitForExistence(timeout: 5))
@@ -510,14 +518,14 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
         XCTAssertGreaterThanOrEqual(dishesRows.count, 2)
         let laundrySummary = app.staticTexts
-            .matching(identifier: "ledgerSummary-Mateo-Help with laundry")
+            .matching(identifier: "ledgerSummary-Avery Example-Help with laundry")
             .element(matching: NSPredicate(format: "label == %@", "Help with laundry"))
         XCTAssertTrue(laundrySummary.waitForExistence(timeout: 5))
 
         laundrySummary.doubleTap()
         XCTAssertTrue(app.navigationBars["Edit Ledger Item"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Help with laundry"].exists)
-        XCTAssertTrue(app.staticTexts["Mateo"].exists)
+        XCTAssertTrue(app.staticTexts["Avery Example"].exists)
         XCTAssertTrue(app.staticTexts["Recorded by"].exists)
         app.navigationBars["Edit Ledger Item"].buttons["Cancel"].tap()
         XCTAssertTrue(app.navigationBars["Weekly Ledger"].waitForExistence(timeout: 5))
@@ -525,7 +533,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testFamilyStatisticsPageIsAvailableAsTopLevelTab() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launch()
 
         app.signInAndJoinDemoFamilyIfNeeded()
@@ -537,14 +545,19 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
         XCTAssertTrue(app.navigationBars["Stats & Trends"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["familyStatisticsPage"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["statsWeeklyTrendChart"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["statsYearChart"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["statsProjectionChart"].exists)
+
+        for identifier in ["statsWeeklyTrendChart", "statsYearChart", "statsProjectionChart"] {
+            let chart = app.descendants(matching: .any)[identifier]
+            for _ in 0..<8 where !chart.exists {
+                app.swipeUp()
+            }
+            XCTAssertTrue(chart.waitForExistence(timeout: 5), "Expected \(identifier) on the statistics page.")
+        }
     }
 
     @MainActor
     func testLedgerTabReplacesStandaloneApprovalsPage() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launch()
 
         app.signInAndJoinDemoFamilyIfNeeded()
@@ -557,9 +570,8 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Weekly Ledger"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["reportingWeekPicker"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.descendants(matching: .any)["ledgerSettlementLink"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["weeklyLedgerHeader"].waitForExistence(timeout: 5))
 
-        XCTAssertTrue(app.staticTexts["Starting points"].exists)
+        XCTAssertTrue(app.staticTexts["Starting points"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Activity by day"].exists)
         XCTAssertFalse(app.buttons["ledgerSort-item"].exists)
 
@@ -574,7 +586,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testRuleCatalogsHaveSingleBackButton() throws {
-        let app = XCUIApplication()
+        let app = XCUIApplication.isolatedForTesting()
         app.launch()
 
         app.signInAndJoinDemoFamilyIfNeeded()
@@ -601,6 +613,8 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
     @MainActor
     func testLaunchPerformance() throws {
         measure(metrics: [XCTApplicationLaunchMetric()]) {
+            // Intentional exception: measure the normal persistent/CloudKit-configured launch path,
+            // not the test-only isolated-store configuration used by stateful UI scenarios.
             XCUIApplication().launch()
         }
     }
@@ -608,6 +622,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
 private extension XCUIApplication {
     static func isolatedForTesting() -> XCUIApplication {
+        // Factory construction is the only other intentional direct XCUIApplication initializer.
         let app = XCUIApplication()
         app.launchEnvironment["UITEST_ISOLATED_STORE"] = "1"
         return app

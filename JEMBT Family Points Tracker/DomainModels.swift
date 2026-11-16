@@ -902,6 +902,18 @@ extension FamilyMembershipRole {
         }
     }
 
+    var profileRole: MemberRole {
+        switch self {
+        case .familyAdmin, .owner, .parent: .parent
+        case .caregiver: .caregiver
+        case .child, .viewer: .child
+        }
+    }
+
+    func isCompatible(with profileRole: MemberRole) -> Bool {
+        self.profileRole == profileRole
+    }
+
     var title: String {
         switch self {
         case .familyAdmin, .owner: "Family Admin"
@@ -981,6 +993,10 @@ final class FamilyInvitation {
     var status: InvitationStatus {
         get { InvitationStatus(rawValue: statusRawValue) ?? .pending }
         set { statusRawValue = newValue.rawValue }
+    }
+
+    func isActivePending(at date: Date) -> Bool {
+        status == .pending && expiresAt.map { $0 > date } != false
     }
 
     init(

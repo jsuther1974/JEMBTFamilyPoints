@@ -406,8 +406,7 @@ struct FamilyStorefrontView: View {
         }
 
         do {
-            try modelContext.save()
-            publishFamilyChanges()
+            try persistFamilyMutation { try modelContext.save() }
             let count = cartCount
             cartQuantities.removeAll()
             purchaseMessage = "You bought \(count) item\(count == 1 ? "" : "s")!"
@@ -423,6 +422,10 @@ struct FamilyStorefrontView: View {
         guard canManage, let familyID else {
             throw RuleEditingError.notAuthorized
         }
+        try ProtectedMutationPolicy.authorizeRuleManagement(
+            session: MutationSession(appleIDManager: appleIDManager),
+            targetRules: rule.map { [$0] } ?? []
+        )
 
         let target = rule ?? RuleTemplate(
             familyID: familyID,
@@ -464,13 +467,13 @@ struct FamilyStorefrontView: View {
         target.acceleratorEnabled = false
         target.requiresApproval = true
         target.isEnabled = draft.isEnabled
-        try modelContext.save()
-        publishFamilyChanges()
+        try persistFamilyMutation { try modelContext.save() }
     }
 
-    private func publishFamilyChanges() {
-        FamilySharingCoordinator.shared.publishAfterProtectedMutation(
-            session: MutationSession(appleIDManager: appleIDManager)
+    private func persistFamilyMutation<T>(_ mutation: () throws -> T) throws -> T {
+        try FamilySharingCoordinator.shared.performProtectedMutation(
+            session: MutationSession(appleIDManager: appleIDManager),
+            mutation
         )
     }
 }

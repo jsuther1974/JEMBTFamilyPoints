@@ -45,26 +45,26 @@ enum SeedData {
         [
             FamilyMember(
                 familyID: demoFamilyID,
-                name: "Mateo",
-                birthDate: date(2016, 3, 19),
+                name: "Avery Example",
+                birthDate: date(2016, 1, 1),
                 role: .child
             ),
             FamilyMember(
                 familyID: demoFamilyID,
-                name: "Emilio",
-                birthDate: date(2018, 12, 30),
+                name: "Riley Example",
+                birthDate: date(2018, 12, 31),
                 role: .child
             ),
             FamilyMember(
                 familyID: demoFamilyID,
-                name: "Daddy",
-                birthDate: date(1974, 4, 1),
+                name: "Parent Example One",
+                birthDate: date(1980, 1, 1),
                 role: .parent
             ),
             FamilyMember(
                 familyID: demoFamilyID,
-                name: "Papa",
-                birthDate: date(1968, 2, 12),
+                name: "Parent Example Two",
+                birthDate: date(1982, 1, 1),
                 role: .parent
             )
         ]
@@ -213,4 +213,3 @@ private extension RuleMeasurementUnit {
         }
     }
 }
-

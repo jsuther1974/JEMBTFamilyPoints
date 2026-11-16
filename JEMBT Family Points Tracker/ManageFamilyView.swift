@@ -293,6 +293,7 @@ struct ManageFamilyView: View {
                                 onShareInvitation: { invitation in
                                     pendingInviteShare = PendingInviteShare(invitation: invitation, memberName: member.name)
                                 },
+                                onRevokeInvitation: { invitation in revoke(invitation) },
                                 onSave: { draft in try update(member, with: draft) }
                             )
                             .containerRelativeFrame(.horizontal) { length, _ in
@@ -452,13 +453,16 @@ struct ManageFamilyView: View {
     }
 
     private func saveFamilySettings(name: String, cashValuePerPoint: Decimal, for family: AllowanceFamily) throws {
+        try ProtectedMutationPolicy.authorizeFamilyAdministration(
+            session: MutationSession(appleIDManager: appleIDManager),
+            targetFamily: family
+        )
         let previousName = family.name
         let previousCashValue = family.cashValuePerPoint
         family.name = name
         family.cashValuePerPoint = max(0, cashValuePerPoint)
         do {
-            try modelContext.save()
-            publishFamilyChanges()
+            try persistFamilyMutation { try modelContext.save() }
             errorMessage = nil
         } catch {
             family.name = previousName
@@ -469,10 +473,11 @@ struct ManageFamilyView: View {
     }
 
     private func pendingInvitation(for member: FamilyMember) -> FamilyInvitation? {
-        invitations.first {
+        let now = Date.now
+        return invitations.first {
+            $0.familyID == member.familyID &&
             $0.familyMemberID == member.id &&
-            $0.status == .pending &&
-            ($0.expiresAt == nil || $0.expiresAt! > .now)
+            $0.isActivePending(at: now)
         }
     }
 
@@ -480,23 +485,28 @@ struct ManageFamilyView: View {
         guard let family = appleIDManager.currentFamily else {
             throw ManageFamilyError.noSelectedFamily
         }
-        let result = try appleIDManager.addFamilyMember(
-            family: family,
-            name: draft.name,
-            emailAddress: draft.emailAddress,
-            birthDate: draft.birthDate,
-            sourceContactIdentifier: draft.sourceContactIdentifier,
-            avatarData: draft.avatarData,
-            role: draft.role,
-            modelContext: modelContext
+        try ProtectedMutationPolicy.authorizeMemberAdministration(
+            session: MutationSession(appleIDManager: appleIDManager),
+            targetFamily: family
         )
+        let result = try persistFamilyMutation {
+            try appleIDManager.addFamilyMember(
+                family: family,
+                name: draft.name,
+                emailAddress: draft.emailAddress,
+                birthDate: draft.birthDate,
+                sourceContactIdentifier: draft.sourceContactIdentifier,
+                avatarData: draft.avatarData,
+                role: draft.role,
+                modelContext: modelContext
+            )
+        }
         if let invitation = result.invitation {
             inviteToPresentAfterAdd = PendingInviteShare(
                 invitation: invitation,
                 memberName: result.member.name
             )
         }
-        publishFamilyChanges()
         errorMessage = nil
     }
 
@@ -589,16 +599,23 @@ private struct InviteShareSheet: View {
     }
 }
     private func update(_ member: FamilyMember, with draft: MemberDraft) throws {
-        try appleIDManager.updateFamilyMember(
-            member,
-            name: draft.name,
-            emailAddress: draft.emailAddress,
-            birthDate: draft.birthDate,
-            avatarData: draft.avatarData,
-            role: draft.role,
-            modelContext: modelContext
+        guard let family = appleIDManager.currentFamily else { throw ManageFamilyError.noSelectedFamily }
+        try ProtectedMutationPolicy.authorizeMemberAdministration(
+            session: MutationSession(appleIDManager: appleIDManager),
+            targetFamily: family,
+            targetMember: member
         )
-        publishFamilyChanges()
+        try persistFamilyMutation {
+            try appleIDManager.updateFamilyMember(
+                member,
+                name: draft.name,
+                emailAddress: draft.emailAddress,
+                birthDate: draft.birthDate,
+                avatarData: draft.avatarData,
+                role: draft.role,
+                modelContext: modelContext
+            )
+        }
         errorMessage = nil
     }
 
@@ -622,8 +639,15 @@ private struct InviteShareSheet: View {
 
     private func deactivate(_ member: FamilyMember) {
         do {
-            try appleIDManager.deactivateFamilyMember(member, modelContext: modelContext)
-            publishFamilyChanges()
+            guard let family = appleIDManager.currentFamily else { throw ManageFamilyError.noSelectedFamily }
+            try ProtectedMutationPolicy.authorizeMemberAdministration(
+                session: MutationSession(appleIDManager: appleIDManager),
+                targetFamily: family,
+                targetMember: member
+            )
+            try persistFamilyMutation {
+                try appleIDManager.deactivateFamilyMember(member, modelContext: modelContext)
+            }
             errorMessage = nil
         } catch {
             errorMessage = "The family member could not be removed: \(error.localizedDescription)"
@@ -636,22 +660,49 @@ private struct InviteShareSheet: View {
             return
         }
         do {
-            _ = try appleIDManager.createInvitation(
-                for: family,
-                role: FamilyMembershipRole(profileRole: member.role),
-                familyMemberID: member.id,
-                modelContext: modelContext
+            try ProtectedMutationPolicy.authorizeInvitationAdministration(
+                session: MutationSession(appleIDManager: appleIDManager),
+                targetFamily: family,
+                targetMember: member
             )
-            publishFamilyChanges()
+            _ = try persistFamilyMutation {
+                try appleIDManager.createInvitation(
+                    for: family,
+                    role: FamilyMembershipRole(profileRole: member.role),
+                    familyMemberID: member.id,
+                    modelContext: modelContext
+                )
+            }
             errorMessage = nil
         } catch {
             errorMessage = "The invitation code could not be created: \(error.localizedDescription)"
         }
     }
 
-    private func publishFamilyChanges() {
-        FamilySharingCoordinator.shared.publishAfterProtectedMutation(
-            session: MutationSession(appleIDManager: appleIDManager)
+    private func revoke(_ invitation: FamilyInvitation) {
+        guard let family = appleIDManager.currentFamily else {
+            errorMessage = "No family is selected."
+            return
+        }
+        do {
+            try persistFamilyMutation {
+                try appleIDManager.revokeInvitation(
+                    invitation,
+                    in: family,
+                    session: MutationSession(appleIDManager: appleIDManager),
+                    modelContext: modelContext
+                )
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = "The invitation could not be revoked: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistFamilyMutation<T>(_ mutation: () throws -> T) throws -> T {
+        try FamilySharingCoordinator.shared.performProtectedMutation(
+            session: MutationSession(appleIDManager: appleIDManager),
+            mutation
         )
     }
 }
@@ -680,6 +731,7 @@ private struct MemberAdministrationRow: View {
     let onPenalty: (() -> Void)?
     let onGenerateCode: () -> Void
     let onShareInvitation: (FamilyInvitation) -> Void
+    let onRevokeInvitation: (FamilyInvitation) -> Void
     let onSave: (MemberDraft) throws -> Void
 
     var body: some View {
@@ -776,6 +828,14 @@ private struct MemberAdministrationRow: View {
                                     .font(.body)
                             }
                             .accessibilityLabel("Share invitation for \(member.name)")
+                            if canEdit {
+                                Button(role: .destructive) {
+                                    onRevokeInvitation(invitation)
+                                } label: {
+                                    Image(systemName: "xmark.circle")
+                                }
+                                .accessibilityLabel("Revoke invitation for \(member.name)")
+                            }
                         } else if canEdit {
                             Button("Create invite", action: onGenerateCode)
                                 .font(.caption)
@@ -1419,10 +1479,9 @@ struct QuickActivityView: View {
         }
 
         do {
-            try modelContext.save()
-            FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+            try FamilySharingCoordinator.shared.performProtectedMutation(
                 session: MutationSession(appleIDManager: appleIDManager)
-            )
+            ) { try modelContext.save() }
             dismiss()
         } catch {
             errorMessage = "The entries could not be saved: \(error.localizedDescription)"
@@ -1709,10 +1768,9 @@ struct WeeklyLedgerView: View {
                 reviewedBy: reviewer,
                 reviewedAt: reviewedAt
             )
-            try modelContext.save()
-            FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+            try FamilySharingCoordinator.shared.performProtectedMutation(
                 session: MutationSession(appleIDManager: appleIDManager)
-            )
+            ) { try modelContext.save() }
             reviewErrorMessage = nil
         } catch {
             modelContext.rollback()
@@ -2097,10 +2155,9 @@ private struct BulkCopyWeekView: View {
         )
         copies.forEach(modelContext.insert)
         do {
-            try modelContext.save()
-            FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+            try FamilySharingCoordinator.shared.performProtectedMutation(
                 session: MutationSession(appleIDManager: appleIDManager)
-            )
+            ) { try modelContext.save() }
             dismiss()
         } catch {
             modelContext.rollback()
@@ -2334,6 +2391,8 @@ private struct LedgerEntryEditorView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Query private var allMembers: [FamilyMember]
+    @Query private var allRules: [RuleTemplate]
     @State private var occurredAt: Date
     @State private var totalPoints: Int
     @State private var totalQuantity: Double
@@ -2437,6 +2496,20 @@ private struct LedgerEntryEditorView: View {
 
     private func save() {
         guard canEdit, !entries.isEmpty else { return }
+        do {
+            guard let familyID = appleIDManager.currentFamily?.id else {
+                throw ProtectedMutationError.missingSession
+            }
+            try ProtectedMutationPolicy.authorizeLedgerEditing(
+                session: MutationSession(appleIDManager: appleIDManager),
+                entries: entries,
+                familyMemberIDs: Set(allMembers.filter { $0.familyID == familyID }.map(\.id)),
+                familyRuleIDs: Set(allRules.filter { $0.familyID == familyID }.map(\.id))
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         let pointDistribution = distribute(totalPoints, across: entries.count)
         let quantityPerEntry = totalQuantity / Double(entries.count)
         for (index, entry) in entries.enumerated() {
@@ -2449,10 +2522,9 @@ private struct LedgerEntryEditorView: View {
             entry.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         do {
-            try modelContext.save()
-            FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+            try FamilySharingCoordinator.shared.performProtectedMutation(
                 session: MutationSession(appleIDManager: appleIDManager)
-            )
+            ) { try modelContext.save() }
             dismiss()
         } catch {
             modelContext.rollback()

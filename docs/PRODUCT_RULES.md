@@ -46,10 +46,14 @@ Cross-Apple-ID family sharing uses an explicit iCloud invitation in addition to 
 
 - Only a family administrator/owner may create or manage the family's `CKShare`.
 - A participant first accepts the iCloud share, synchronizes the shared family locally, signs in with Apple, and redeems the family's one-time role code.
+- Child and viewer invitations must be linked to an existing active compatible profile; both roles require a child profile. Adult invitations may create a new compatible profile when redeemed.
+- Redeeming an invitation never replaces or relinks a different existing membership for the same Apple ID and family.
 - Accepting an iCloud share alone grants transport access but never creates an app membership or bypasses membership/profile authorization.
 - A shared payload that contains any foreign-family member, rule, rider, invitation, membership, entry, or settlement is rejected before local mutation.
-- Cloud conflicts never silently overwrite another device's snapshot. The user must fetch the server snapshot before publishing again.
-- Local data remains usable offline. Explicit Publish and Sync actions define the cross-account boundary.
+- Cloud conflicts never silently overwrite another device's snapshot. After a validated eligible conflict is fetched, the active family may explicitly choose **Keep Local** (conditionally publish the current local snapshot against that fetched server version) or **Use Cloud Copy** (replace only that family's local graph with the validated remote snapshot). Failed resolutions remain retryable, keep the family dirty when publication state is uncertain, and do not advance the change tag.
+- Local data remains usable offline. Before a protected family mutation saves, the app durably marks that family for publication with a monotonically increasing family-scoped generation. A failed save rolls back only the intent introduced by that attempt, while a successful save coalesces a best-effort publication of the latest family snapshot. A publication completion clears only the generation it published, so an older in-flight operation cannot clear a newer mutation even if its transport ignores cancellation. Publication failure never rolls back the local save; unpublished families remain local-only, and the durable per-family intent allows later retry and reconstruction.
+- Viewers retain no general mutation or publication capability. The sole publication exception is a durable, invitation-specific redemption intent created while a unique active code is pending and usable only after that exact invitation is consumed into a matching family, Apple ID, role, profile, membership, and active session. It publishes the accepted invitation and membership snapshot; failures remain retryable, while reused codes and foreign or mismatched sessions are rejected.
+- Manual Publish and Sync controls remain available. Conflicts still require fetching the server snapshot before publishing again; automatic publication never uses last-writer-wins.
 
 ## Members
 
@@ -59,6 +63,9 @@ Cross-Apple-ID family sharing uses an explicit iCloud invitation in addition to 
 - Deactivation preserves history rather than deleting the member.
 - Avatars may be added, replaced, or removed.
 - Child age and birthday calculations use calendar-day values.
+- A profile linked to a family membership cannot be deactivated. The administrator/owner profile is specifically protected from lockout. A profile with an active, unexpired pending linked invitation cannot be deactivated until a family administrator/owner revokes it or it is otherwise resolved.
+- Expired invitations are deterministically ignored by profile role/deactivation validation and are not presented as active shareable invitations. Family administrators/owners may revoke same-family pending invitations; unauthorized and foreign-family revocation attempts do not mutate them.
+- A profile role cannot be changed when the proposed role is incompatible with any same-family linked membership or active, unexpired pending invitation. Inactive profiles cannot be edited or deactivated again, and foreign-family links are never changed by a member mutation.
 
 ## Reporting weeks
 

@@ -26,18 +26,18 @@ struct WatchFamilySnapshot: Codable, Equatable {
     let recent: [WatchActivitySummary]
 
     static let sample = WatchFamilySnapshot(
-        familyName: "Sutherland Family",
-        viewerName: "Jeffrey",
+        familyName: "Example Family",
+        viewerName: "Morgan Example",
         viewerRole: "parent",
         pendingCount: 2,
         generatedAt: .now,
         members: [
-            WatchMemberSummary(id: "mateo", name: "Mateo", points: 1_240),
-            WatchMemberSummary(id: "sophia", name: "Sophia", points: 875)
+            WatchMemberSummary(id: "sample-child-1", name: "Avery Example", points: 1_240),
+            WatchMemberSummary(id: "sample-child-2", name: "Riley Example", points: 875)
         ],
         recent: [
-            WatchActivitySummary(id: "1", memberName: "Mateo", title: "Help with laundry", points: 25, occurredAt: .now),
-            WatchActivitySummary(id: "2", memberName: "Sophia", title: "Wash the dishes", points: 15, occurredAt: .now.addingTimeInterval(-3_600))
+            WatchActivitySummary(id: "1", memberName: "Avery Example", title: "Help with laundry", points: 25, occurredAt: .now),
+            WatchActivitySummary(id: "2", memberName: "Riley Example", title: "Wash the dishes", points: 15, occurredAt: .now.addingTimeInterval(-3_600))
         ]
     )
 }

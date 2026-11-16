@@ -2,8 +2,6 @@
 //  JEMBT_Family_Points_TrackerTests.swift
 //  JEMBT Family Points TrackerTests
 //
-//  Created by Jeffrey Sutherland on 9/8/26.
-//
 
 import Foundation
 import Testing
@@ -15,6 +13,15 @@ struct JEMBT_Family_Points_TrackerTests {
         // Write your test here and use APIs like `#expect(...)` to check expected conditions.
         // Swift Testing Documentation
         // https://developer.apple.com/documentation/testing
+    }
+
+    @Test func shippedSeedProfilesAreClearlySynthetic() {
+        let members = SeedData.familyMembers
+
+        #expect(members.count == 4)
+        #expect(members.allSatisfy { $0.name.contains("Example") })
+        #expect(members.filter { $0.role == .child }.count == 2)
+        #expect(members.filter { $0.role == .parent }.count == 2)
     }
 
     @MainActor

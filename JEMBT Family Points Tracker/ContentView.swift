@@ -345,10 +345,9 @@ private struct LogActivityView: View {
         }
 
         do {
-            try modelContext.save()
-            FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+            try FamilySharingCoordinator.shared.performProtectedMutation(
                 session: MutationSession(appleIDManager: appleIDManager)
-            )
+            ) { try modelContext.save() }
             selectedRuleID = nil
             quantity = 1
             points = 0
@@ -674,10 +673,9 @@ struct SettlementView: View {
         }
 
         do {
-            try modelContext.save()
-            FamilySharingCoordinator.shared.publishAfterProtectedMutation(
+            try FamilySharingCoordinator.shared.performProtectedMutation(
                 session: MutationSession(appleIDManager: appleIDManager)
-            )
+            ) { try modelContext.save() }
             errorMessage = nil
             showingPendingWarning = false
             completionMessage = "Congratulations! You closed the week ending \(closedWeek.formatted(date: .numeric, time: .omitted)) and distributed \(distributedPoints.formatted()) points!"

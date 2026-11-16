@@ -35,9 +35,9 @@ That factory sets `UITEST_ISOLATED_STORE=1`. The application then creates an in-
 
 Do not set the isolation variable in production schemes. Do not remove production CloudKit behavior to make tests deterministic.
 
-### Current caveat
+### Direct-construction exceptions
 
-The helper exists in the UI-test source, but the current working tree still contains direct `XCUIApplication()` construction in the tests. Until those call sites use the factory, the intended isolation contract is not fully enforced. Track this in `WORK_STATUS.md` and do not claim the full suite is isolated until verified.
+All stateful UI scenarios use `XCUIApplication.isolatedForTesting()`. The only direct `XCUIApplication()` construction is inside that factory and in `testLaunchPerformance()`, which intentionally measures the normal persistent/CloudKit-configured launch path rather than the test-only store.
 
 ## Unit-test persistence
 

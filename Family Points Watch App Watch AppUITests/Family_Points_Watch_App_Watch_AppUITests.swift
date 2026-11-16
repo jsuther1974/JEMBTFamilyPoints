@@ -13,7 +13,7 @@ final class Family_Points_Watch_App_Watch_AppUITests: XCTestCase {
 
         XCTAssertTrue(app.descendants(matching: .any)["watchDashboard"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.descendants(matching: .any)["watchFamilyHeader"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["watchMember-mateo"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["watchMember-sample-child-1"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["watchPendingCount"].exists)
 
         let lastUpdated = app.descendants(matching: .any)["watchLastUpdated"]
