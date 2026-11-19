@@ -217,9 +217,11 @@ struct FamilyStorefrontView: View {
                     }
                 }
                 .padding()
+                .frame(maxWidth: 980)
+                .frame(maxWidth: .infinity)
             }
         }
-        .background { StoreInteriorBackground().ignoresSafeArea() }
+        .background { ClubhouseBackdrop(scene: .store, intensity: .standard).ignoresSafeArea() }
         .navigationTitle(storeName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -322,7 +324,7 @@ struct FamilyStorefrontView: View {
         }
         .frame(maxWidth: .infinity)
         .padding()
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .clubhouseSurface()
         .overlay {
             RoundedRectangle(cornerRadius: 14)
                 .stroke(.white.opacity(0.7))

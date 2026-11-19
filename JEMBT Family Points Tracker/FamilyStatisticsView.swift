@@ -76,7 +76,10 @@ struct FamilyStatisticsView: View {
                 }
             }
             .padding()
+            .frame(maxWidth: 980)
+            .frame(maxWidth: .infinity)
         }
+        .background { ClubhouseBackdrop(scene: .stats, intensity: .standard).ignoresSafeArea() }
         .navigationTitle("Stats & Trends")
         .navigationBarTitleDisplayMode(.inline)
         .accessibilityIdentifier("familyStatisticsPage")
@@ -275,7 +278,7 @@ struct FamilyStatisticsView: View {
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .clubhouseSurface()
     }
 
     private func winnerNames(for trophy: PeriodTrophy) -> String {

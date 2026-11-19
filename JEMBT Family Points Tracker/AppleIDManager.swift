@@ -478,7 +478,10 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
     // MARK: - ASAuthorizationControllerPresentationContextProviding
     
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
-        presentationAnchor ?? ASPresentationAnchor()
+        guard let presentationAnchor else {
+            preconditionFailure("Sign in with Apple requires a presentation anchor before authorization begins.")
+        }
+        return presentationAnchor
     }
     
     // MARK: - Mapping Management

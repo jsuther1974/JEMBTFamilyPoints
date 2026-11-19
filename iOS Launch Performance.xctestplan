@@ -1,0 +1,31 @@
+{
+  "configurations" : [
+    {
+      "id" : "4B14738A-E878-4B33-A79C-368C2D7DFE63",
+      "name" : "Default",
+      "options" : {}
+    }
+  ],
+  "defaultOptions" : {
+    "codeCoverage" : false,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:JEMBT Family Points Tracker.xcodeproj",
+      "identifier" : "37550DCA304FFCDD008D9993",
+      "name" : "JEMBT Family Points Tracker"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : false,
+      "selectedTests" : [
+        "JEMBT_Family_Points_TrackerUITests/testLaunchPerformance()"
+      ],
+      "target" : {
+        "containerPath" : "container:JEMBT Family Points Tracker.xcodeproj",
+        "identifier" : "37550DE5304FFCDD008D9993",
+        "name" : "JEMBT Family Points TrackerUITests"
+      }
+    }
+  ],
+  "version" : 1
+}

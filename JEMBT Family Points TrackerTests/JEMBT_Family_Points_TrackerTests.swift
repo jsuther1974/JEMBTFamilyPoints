@@ -4,8 +4,26 @@
 //
 
 import Foundation
+import SwiftData
 import Testing
 @testable import JEMBT_Family_Points_Tracker
+
+private final class AudioSessionActivationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var activationCount = 0
+    private var activatedOnMainThread = false
+
+    func recordActivation() {
+        lock.withLock {
+            activationCount += 1
+            activatedOnMainThread = Thread.isMainThread
+        }
+    }
+
+    var snapshot: (count: Int, onMainThread: Bool) {
+        lock.withLock { (activationCount, activatedOnMainThread) }
+    }
+}
 
 struct JEMBT_Family_Points_TrackerTests {
 
@@ -22,6 +40,80 @@ struct JEMBT_Family_Points_TrackerTests {
         #expect(members.allSatisfy { $0.name.contains("Example") })
         #expect(members.filter { $0.role == .child }.count == 2)
         #expect(members.filter { $0.role == .parent }.count == 2)
+    }
+
+    @Test func scenarioAndAudioOverridesRequireIsolatedStore() {
+        let nonisolated = UITestLaunchConfiguration(environment: [
+            "UITEST_SCENARIO": "signed-in-demo-parent",
+            "UITEST_DISABLE_AUDIO": "1"
+        ])
+        #expect(!nonisolated.usesIsolatedStore)
+        #expect(nonisolated.scenario == nil)
+        #expect(!nonisolated.disablesAudio)
+
+        let isolated = UITestLaunchConfiguration(environment: [
+            "UITEST_ISOLATED_STORE": "1",
+            "UITEST_SCENARIO": "signed-in-demo-parent",
+            "UITEST_DISABLE_AUDIO": "1"
+        ])
+        #expect(isolated.usesIsolatedStore)
+        #expect(isolated.scenario == .signedInDemoParent)
+        #expect(isolated.disablesAudio)
+    }
+
+    @MainActor
+    @Test func signedInScenarioFixturesEstablishScopedFamilySessions() throws {
+        let demoContainer = try makeFixtureContainer()
+        try SeedData.seedIfNeeded(in: demoContainer.mainContext)
+        let demoManager = AppleIDManager()
+        try UITestScenarioFixtures.establish(
+            .signedInDemoParent,
+            manager: demoManager,
+            context: demoContainer.mainContext
+        )
+        #expect(demoManager.isSignedIn)
+        #expect(demoManager.currentAppleID == UITestScenarioFixtures.demoParentAppleID)
+        #expect(demoManager.currentFamily?.id == SeedData.demoFamilyID)
+        #expect(demoManager.currentMembership?.familyID == SeedData.demoFamilyID)
+        #expect(demoManager.currentFamilyMember?.name == "Parent Example One")
+
+        let adminContainer = try makeFixtureContainer()
+        try SeedData.seedIfNeeded(in: adminContainer.mainContext)
+        let adminManager = AppleIDManager()
+        try UITestScenarioFixtures.establish(
+            .signedInEmptyAdministrator,
+            manager: adminManager,
+            context: adminContainer.mainContext
+        )
+        #expect(adminManager.isSignedIn)
+        #expect(adminManager.currentAppleID == UITestScenarioFixtures.administratorAppleID)
+        #expect(adminManager.currentFamily?.name == "UI Test Family")
+        #expect(adminManager.currentFamilyMember?.name == "UI Test Admin")
+        #expect(adminManager.currentMembership?.familyID == adminManager.currentFamily?.id)
+        #expect(adminManager.currentFamily?.id != SeedData.demoFamilyID)
+    }
+
+    @MainActor
+    private func makeFixtureContainer() throws -> ModelContainer {
+        let schema = Schema([
+            AllowanceFamily.self,
+            FamilyInvitation.self,
+            FamilyMembership.self,
+            FamilyMember.self,
+            RuleTemplate.self,
+            RuleRider.self,
+            LedgerEntry.self,
+            WeeklySettlement.self,
+            AppleIDMapping.self
+        ])
+        return try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: true,
+                cloudKitDatabase: .none
+            )]
+        )
     }
 
     @MainActor
@@ -76,6 +168,43 @@ struct JEMBT_Family_Points_TrackerTests {
 
         director.leave(owner: owner)
         #expect(director.scene == .none)
+    }
+
+    @MainActor
+    @Test func runtimeAudioDisableSkipsPlaybackWithoutChangingAudioControllerCoverage() {
+        let probe = AudioSessionActivationProbe()
+        let controller = AudioSessionController { completion in
+            probe.recordActivation()
+            completion(true)
+        }
+        let director = SoundscapeDirector(audioSession: controller, disableAudio: true)
+
+        director.activate(.family)
+        director.play(.pointsGained)
+
+        #expect(!director.isEnabled)
+        #expect(director.scene == .family)
+        #expect(probe.snapshot.count == 0)
+    }
+
+    @Test func audioSessionActivationIsOffMainThreadSerializedAndIdempotent() async {
+        let probe = AudioSessionActivationProbe()
+        let controller = AudioSessionController { completion in
+            probe.recordActivation()
+            completion(true)
+        }
+
+        let results = await withTaskGroup(of: Bool.self, returning: [Bool].self) { group in
+            for _ in 0..<8 {
+                group.addTask { await controller.activateIfNeeded() }
+            }
+            return await group.reduce(into: []) { $0.append($1) }
+        }
+
+        let snapshot = probe.snapshot
+        #expect(results.allSatisfy { $0 })
+        #expect(snapshot.count == 1)
+        #expect(!snapshot.onMainThread)
     }
 
     @MainActor

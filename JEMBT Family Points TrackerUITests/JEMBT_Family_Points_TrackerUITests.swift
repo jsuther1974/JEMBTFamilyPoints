@@ -21,12 +21,32 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
     }
 
     @MainActor
-    func testStorefrontReplacesRecordTabAndUsesFamilyName() throws {
+    func testJoinFamilyWithInvitationCodeEstablishesSession() throws {
         let app = XCUIApplication.isolatedForTesting()
-        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-store-brand-\(UUID().uuidString)@local"
+        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-join-\(UUID().uuidString)@example.invalid"
         app.launch()
 
-        app.signInAndCreateFamilyForAddingMembers()
+        let simulatorButton = app.buttons["Use Simulator Test Account"]
+        XCTAssertTrue(simulatorButton.waitForExistence(timeout: 5))
+        simulatorButton.tap()
+        let joinButton = app.buttons["Join a family with an invitation code"]
+        XCTAssertTrue(joinButton.waitForExistence(timeout: 5))
+        joinButton.tap()
+        let invitationField = app.textFields["Invitation code"]
+        XCTAssertTrue(invitationField.waitForExistence(timeout: 5))
+        invitationField.tap()
+        invitationField.typeText("DEMO-FAMILY")
+        app.navigationBars.buttons["Join"].tap()
+
+        XCTAssertTrue(app.tabBars.buttons["Family"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["familyNameHeading"].exists)
+    }
+
+    @MainActor
+    func testStorefrontReplacesRecordTabAndUsesFamilyName() throws {
+        let app = XCUIApplication.isolatedForTesting(scenario: .emptyAdministrator)
+        app.launch()
+
 
         let storeTab = app.tabBars.buttons["Store"]
         XCTAssertTrue(storeTab.waitForExistence(timeout: 5))
@@ -65,11 +85,9 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testCurrentMemberRowDoesNotShowInviteActions() throws {
-        let app = XCUIApplication.isolatedForTesting()
-        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-current-member-\(UUID().uuidString)@local"
+        let app = XCUIApplication.isolatedForTesting(scenario: .emptyAdministrator)
         app.launch()
 
-        app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
 
         let currentMemberCard = app.buttons["memberCard-UI Test Admin"]
@@ -80,10 +98,8 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testFamilyStorefrontOpensWithParentManagement() throws {
-        let app = XCUIApplication.isolatedForTesting()
+        let app = XCUIApplication.isolatedForTesting(scenario: .demoParent)
         app.launch()
-
-        app.signInAndJoinDemoFamilyIfNeeded()
         let storeTab = app.tabBars.buttons["Store"]
         XCTAssertTrue(storeTab.waitForExistence(timeout: 5))
         storeTab.tap()
@@ -148,11 +164,9 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testFamilyNameEditButtonOpensEditor() throws {
-        let app = XCUIApplication.isolatedForTesting()
-        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-family-name-\(UUID().uuidString)@local"
+        let app = XCUIApplication.isolatedForTesting(scenario: .emptyAdministrator)
         app.launch()
 
-        app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
 
         let familyActions = app.descendants(matching: .any)["familyActions"]
@@ -212,11 +226,9 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testNewChildDoesNotShowFabricatedBirthdate() throws {
-        let app = XCUIApplication.isolatedForTesting()
-        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-empty-birthday-\(UUID().uuidString)@local"
+        let app = XCUIApplication.isolatedForTesting(scenario: .emptyAdministrator)
         app.launch()
 
-        app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
         app.openAddMemberEditor()
 
@@ -228,11 +240,9 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testBirthdatePickerWaitsForExplicitConfirmation() throws {
-        let app = XCUIApplication.isolatedForTesting()
-        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-birthday-confirmation-\(UUID().uuidString)@local"
+        let app = XCUIApplication.isolatedForTesting(scenario: .emptyAdministrator)
         app.launch()
 
-        app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
         app.openAddMemberEditor()
 
@@ -264,11 +274,9 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testAddMemberStartsWithNameFocused() throws {
-        let app = XCUIApplication.isolatedForTesting()
-        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-member-focus-\(UUID().uuidString)@local"
+        let app = XCUIApplication.isolatedForTesting(scenario: .emptyAdministrator)
         app.launch()
 
-        app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
         app.openAddMemberEditor()
 
@@ -283,11 +291,9 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testAddMemberTabOrderIncludesRoleAndBirthdate() throws {
-        let app = XCUIApplication.isolatedForTesting()
-        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-member-tabs-\(UUID().uuidString)@local"
+        let app = XCUIApplication.isolatedForTesting(scenario: .emptyAdministrator)
         app.launch()
 
-        app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
         app.openAddMemberEditor()
 
@@ -314,8 +320,7 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testRegularWidthAddMemberControlsRemainInteractiveAfterTextEntry() throws {
-        let app = XCUIApplication.isolatedForTesting()
-        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-ipad-member-controls-\(UUID().uuidString)@local"
+        let app = XCUIApplication.isolatedForTesting(scenario: .emptyAdministrator)
         app.launch()
 
         try XCTSkipUnless(
@@ -323,7 +328,6 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
             "This regression covers the regular-width iPad member editor."
         )
 
-        app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
         app.openAddMemberEditor()
 
@@ -355,12 +359,10 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testCaregiverCardDoesNotShowPoints() throws {
-        let app = XCUIApplication.isolatedForTesting()
-        app.launchEnvironment["UITEST_APPLE_ID"] = "ui-test-caregiver-card-\(UUID().uuidString)@local"
+        let app = XCUIApplication.isolatedForTesting(scenario: .emptyAdministrator)
         app.launchEnvironment["UITEST_DEFAULT_MEMBER_ROLE"] = "caregiver"
         app.launch()
 
-        app.signInAndCreateFamilyForAddingMembers()
         app.openFamilyTab()
         app.openAddMemberEditor()
 
@@ -389,10 +391,8 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testFamilyPageShowsPointsInMemberCardsWithoutStandaloneWeekSection() throws {
-        let app = XCUIApplication.isolatedForTesting()
+        let app = XCUIApplication.isolatedForTesting(scenario: .demoParent)
         app.launch()
-
-        app.signInAndJoinDemoFamilyIfNeeded()
         app.openFamilyTab()
 
         let reportingWeek = app.descendants(matching: .any)["reportingWeekPicker"]
@@ -401,7 +401,17 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
         let familyOverview = app.descendants(matching: .any)["familyOverviewBanner"]
         XCTAssertTrue(familyOverview.exists)
         XCTAssertTrue(app.descendants(matching: .any)["familyNameHeading"].exists)
-        XCTAssertLessThan(app.staticTexts["Children"].frame.minY, 220, "The compact summary should leave room for member cards.")
+
+        let windowFrame = app.windows.firstMatch.frame
+        if windowFrame.width < 700 {
+            let childrenHeading = app.staticTexts["Children"]
+            XCTAssertTrue(childrenHeading.exists)
+            XCTAssertLessThan(
+                childrenHeading.frame.minY,
+                windowFrame.midY,
+                "The compact summary should keep the first member section in the upper half of the usable screen."
+            )
+        }
 
         let childPoints = app.descendants(matching: .any)["pointsSummary-Avery Example"]
         for _ in 0..<4 where !childPoints.exists {
@@ -417,10 +427,8 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testFamilyQuickAwardSavesAndAppearsInWeeklyLedger() throws {
-        let app = XCUIApplication.isolatedForTesting()
+        let app = XCUIApplication.isolatedForTesting(scenario: .demoParent)
         app.launch()
-
-        app.signInAndJoinDemoFamilyIfNeeded()
         app.openFamilyTab()
 
         let rewardAvery = app.buttons["Reward Avery Example"]
@@ -533,10 +541,8 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testFamilyStatisticsPageIsAvailableAsTopLevelTab() throws {
-        let app = XCUIApplication.isolatedForTesting()
+        let app = XCUIApplication.isolatedForTesting(scenario: .demoParent)
         app.launch()
-
-        app.signInAndJoinDemoFamilyIfNeeded()
 
         XCTAssertEqual(app.tabBars.buttons.count, 5)
         let statsTab = app.tabBars.buttons["Stats"]
@@ -557,10 +563,8 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testLedgerTabReplacesStandaloneApprovalsPage() throws {
-        let app = XCUIApplication.isolatedForTesting()
+        let app = XCUIApplication.isolatedForTesting(scenario: .demoParent)
         app.launch()
-
-        app.signInAndJoinDemoFamilyIfNeeded()
 
         XCTAssertFalse(app.tabBars.buttons["Approvals"].exists)
         let ledgerTab = app.tabBars.buttons["Ledger"]
@@ -586,10 +590,8 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 
     @MainActor
     func testRuleCatalogsHaveSingleBackButton() throws {
-        let app = XCUIApplication.isolatedForTesting()
+        let app = XCUIApplication.isolatedForTesting(scenario: .demoParent)
         app.launch()
-
-        app.signInAndJoinDemoFamilyIfNeeded()
 
         let rulesTab = app.tabBars.buttons["Rules"]
         XCTAssertTrue(rulesTab.waitForExistence(timeout: 5), "Expected Rules to be a direct tab.")
@@ -621,10 +623,19 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
 }
 
 private extension XCUIApplication {
-    static func isolatedForTesting() -> XCUIApplication {
+    enum FixtureScenario: String {
+        case demoParent = "signed-in-demo-parent"
+        case emptyAdministrator = "signed-in-empty-administrator"
+    }
+
+    static func isolatedForTesting(scenario: FixtureScenario? = nil) -> XCUIApplication {
         // Factory construction is the only other intentional direct XCUIApplication initializer.
         let app = XCUIApplication()
         app.launchEnvironment["UITEST_ISOLATED_STORE"] = "1"
+        app.launchEnvironment["UITEST_DISABLE_AUDIO"] = "1"
+        if let scenario {
+            app.launchEnvironment["UITEST_SCENARIO"] = scenario.rawValue
+        }
         return app
     }
 

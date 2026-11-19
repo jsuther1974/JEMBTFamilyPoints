@@ -87,6 +87,14 @@ The app shares SwiftUI screens across idioms. Compact iPhone member editing uses
 
 Do not replace idiom checks with size-class assumptions without rerunning both iPhone and iPad regressions.
 
+## Family Clubhouse visual system
+
+`ClubhouseArtwork.swift` owns a reusable, adaptive backdrop for the five top-level iOS rooms: Family living room/gallery, Store shop, Rules bulletin board, Ledger desk, and Stats trophy nook. Scenes use scalable SwiftUI shapes, symbols, gradients, and semantic colors. Top-level views keep data-dense lists, balances, controls, and charts on system or material surfaces; artwork is confined to the background and wider iPad gutters.
+
+The existing bundled family artwork is reused only as a cropped, deliberately framed portrait. It is never stretched into wallpaper, and the app icon asset is not modified. The baseball-player portrait and recurring pet, token jar, paper airplane, books, game pieces, glove/duffel motifs are fictional decorative artwork with no person, school, team, league, number, or logo identity.
+
+All decorative artwork is accessibility-hidden and ignores hit testing. The backdrop reduces detail for Increase Contrast, substitutes a nearly opaque semantic system surface for Reduce Transparency, adapts to light/dark appearance, and contains no motion. Layout uses compact edge cameos on iPhone and wider outer-gutter compositions on iPad. Runtime avatars, Contacts photos, names, balances, and other family data must remain in content views and must never be incorporated into the backdrop or decorative portraits.
+
 ## Watch architecture
 
 The iPhone app's `WatchSnapshotSyncView` observes the active family's members and entries and asks `WatchSyncBridge` to publish a property-list-compatible application context.

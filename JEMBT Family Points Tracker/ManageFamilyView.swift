@@ -24,6 +24,7 @@ struct ManageFamilyView: View {
     @Query private var entries: [LedgerEntry]
     @Query private var settlements: [WeeklySettlement]
     @Query private var rules: [RuleTemplate]
+    @ObservedObject private var sharingCoordinator = FamilySharingCoordinator.shared
     @State private var showingFamilyNameEditor = false
     @State private var showingAddMember = false
     @State private var memberPendingRemoval: FamilyMember?
@@ -93,6 +94,33 @@ struct ManageFamilyView: View {
         )
     }
 
+    @ViewBuilder
+    private var sharingErrorSection: some View {
+        if let sharingError = sharingCoordinator.lastError {
+            Section {
+                Label(sharingError, systemImage: "exclamationmark.icloud.fill")
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("familySharingError")
+                if sharingCoordinator.hasConflict(for: appleIDManager.currentFamily?.id) {
+                    Button("Keep Local") { resolveCloudConflict(keepingLocal: true) }
+                        .disabled(isCloudSyncing || appleIDManager.currentMembership?.role == .viewer)
+                        .accessibilityIdentifier("keepLocalFamilyConflict")
+                    Button("Use Cloud Copy", role: .destructive) { resolveCloudConflict(keepingLocal: false) }
+                        .disabled(isCloudSyncing)
+                        .accessibilityIdentifier("useCloudFamilyConflict")
+                }
+            } header: {
+                Text("Family sharing")
+            } footer: {
+                if sharingCoordinator.hasConflict(for: appleIDManager.currentFamily?.id) {
+                    Text("Keep Local publishes this device's family snapshot. Use Cloud Copy replaces only this family's local graph with the validated shared snapshot.")
+                } else {
+                    Text("Your local changes are saved. Use Sync Shared Family to fetch the latest snapshot before publishing again.")
+                }
+            }
+        }
+    }
+
     var body: some View {
         List {
             if let errorMessage {
@@ -101,6 +129,8 @@ struct ManageFamilyView: View {
                         .foregroundStyle(.red)
                 }
             }
+
+            sharingErrorSection
 
             if appleIDManager.currentFamilyMember == nil {
                 Section {
@@ -128,19 +158,8 @@ struct ManageFamilyView: View {
         }
         .scrollContentBackground(.hidden)
         .background {
-            GeometryReader { proxy in
-                Image("FamilyPageWallpaper")
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .clipped()
-                    .overlay {
-                        Rectangle()
-                            .fill(.regularMaterial)
-                    }
-            }
-            .ignoresSafeArea()
-            .accessibilityHidden(true)
+            ClubhouseBackdrop(scene: .family, intensity: .standard)
+                .ignoresSafeArea()
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             familyOverviewBanner
@@ -214,11 +233,8 @@ struct ManageFamilyView: View {
 
     private var familyOverviewBanner: some View {
         HStack(spacing: 8) {
-            Image("FamilyPageWallpaper")
-                .resizable()
-                .scaledToFill()
-                .frame(width: 40, height: 40)
-                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            FramedFamilyPortrait()
+                .frame(width: 48, height: 42)
                 .accessibilityHidden(true)
 
             Text(displayedFamilyName)
@@ -408,6 +424,24 @@ struct ManageFamilyView: View {
                 try await FamilySharingCoordinator.shared.publish(
                     session: MutationSession(appleIDManager: appleIDManager)
                 )
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func resolveCloudConflict(keepingLocal: Bool) {
+        isCloudSyncing = true
+        Task { @MainActor in
+            defer { isCloudSyncing = false }
+            do {
+                let session = MutationSession(appleIDManager: appleIDManager)
+                if keepingLocal {
+                    try await sharingCoordinator.resolveConflictKeepingLocal(session: session)
+                } else {
+                    try await sharingCoordinator.resolveConflictUsingCloudCopy(session: session)
+                }
                 errorMessage = nil
             } catch {
                 errorMessage = error.localizedDescription
@@ -660,11 +694,6 @@ private struct InviteShareSheet: View {
             return
         }
         do {
-            try ProtectedMutationPolicy.authorizeInvitationAdministration(
-                session: MutationSession(appleIDManager: appleIDManager),
-                targetFamily: family,
-                targetMember: member
-            )
             _ = try persistFamilyMutation {
                 try appleIDManager.createInvitation(
                     for: family,
@@ -1644,9 +1673,11 @@ struct WeeklyLedgerView: View {
                         }
                     }
                 }
+                .scrollContentBackground(.hidden)
                 .accessibilityIdentifier("weeklyLedgerHeader")
             }
         }
+        .background { ClubhouseBackdrop(scene: .ledger).ignoresSafeArea() }
         .navigationTitle("Weekly Ledger")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -3335,9 +3366,25 @@ private struct BirthdayInputField: UIViewRepresentable {
 
         let toolbar = UIToolbar()
         toolbar.sizeToFit()
+        let confirmationButton: UIBarButtonItem
+        if #available(iOS 26.0, *) {
+            confirmationButton = UIBarButtonItem(
+                title: "Use This Date",
+                style: .prominent,
+                target: context.coordinator,
+                action: #selector(Coordinator.useSelectedDate)
+            )
+        } else {
+            confirmationButton = UIBarButtonItem(
+                title: "Use This Date",
+                style: .done,
+                target: context.coordinator,
+                action: #selector(Coordinator.useSelectedDate)
+            )
+        }
         toolbar.items = [
             UIBarButtonItem(systemItem: .flexibleSpace),
-            UIBarButtonItem(title: "Use This Date", style: .done, target: context.coordinator, action: #selector(Coordinator.useSelectedDate))
+            confirmationButton
         ]
         textField.inputAccessoryView = toolbar
         context.coordinator.textField = textField

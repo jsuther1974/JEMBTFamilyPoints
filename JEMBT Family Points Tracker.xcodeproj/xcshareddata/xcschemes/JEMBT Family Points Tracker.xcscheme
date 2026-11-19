@@ -26,29 +26,22 @@
       buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
-      shouldUseLaunchSchemeArgsEnv = "YES"
-      shouldAutocreateTestPlan = "YES">
-      <Testables>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "YES">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "37550DDB304FFCDD008D9993"
-               BuildableName = "JEMBT Family Points TrackerTests.xctest"
-               ReferencedContainer = "container:JEMBT Family Points Tracker.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "37550DE5304FFCDD008D9993"
-               BuildableName = "JEMBT Family Points TrackerUITests.xctest"
-               ReferencedContainer = "container:JEMBT Family Points Tracker.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-      </Testables>
+      shouldUseLaunchSchemeArgsEnv = "YES">
+      <TestPlans>
+         <TestPlanReference
+            reference = "container:iOS Complete Release.xctestplan"
+            default = "YES">
+         </TestPlanReference>
+         <TestPlanReference
+            reference = "container:iOS Unit Fast.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference
+            reference = "container:iOS UI Functional.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference
+            reference = "container:iOS Launch Performance.xctestplan">
+         </TestPlanReference>
+      </TestPlans>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"

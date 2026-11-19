@@ -1,30 +1,38 @@
-# Current work status
+# Work Status
 
-Last verified against the working tree: 2026-11-18.
+## Current objective
 
-This is a temporary handoff, not a product specification. Replace completed items rather than accumulating history.
+Implement and verify the first Family Clubhouse visual-art pass while preserving existing Store, Rules, Ledger, Stats, Family, audio, Watch, test-plan, authorization, and family-isolation behavior.
 
-## Objective
+## Implementation state
 
-Complete explicit cross-Apple-ID CloudKit family sharing and authorization hardening without changing production persistence configuration or granting restricted roles broader mutation rights.
+- Added `ClubhouseArtwork.swift`, a reusable semantic light/dark SwiftUI backdrop system for Family, Store, Rules, Ledger, and Stats with quiet/standard readability intensity.
+- Added original scalable decorative art: a fictional unbranded teenage baseball player with a slightly dirty uniform, shoulder duffel and visible bat; plus recurring pet, star-token jar, paper airplane, books/game pieces, and trophy motifs.
+- Replaced the stretched Family wallpaper with the bundled family artwork in a deliberate portrait frame; the app icon and runtime member photos remain unchanged and separate.
+- Integrated non-interactive, accessibility-hidden scenes behind the five top-level pages. Store and Stats data surfaces remain readable, list content retains system row surfaces, and Store/Stats content widths expose wider iPad gutters.
+- Backdrops reduce artwork for Increase Contrast, use a near-opaque semantic surface for Reduce Transparency, contain no motion, and adapt composition for compact versus regular horizontal size classes.
+- Documented the visual-system privacy and accessibility boundaries in `docs/ARCHITECTURE.md`.
+- Existing CloudKit sharing, role, accounting, persistence, Watch snapshot, and audio logic was not redefined by this pass.
 
-## Verified in the working tree
+### Pre-existing worktree state preserved
 
-- Viewer invitation acceptance prepares a durable, invitation-specific publication authorization before save, then validates the consumed invitation plus exact family/Apple-ID/role/profile/membership/session graph before publishing. The accepted invitation and viewer membership are included in the exported snapshot; failure remains retryable after coordinator reconstruction. Reused codes and mismatched/foreign sessions fail, and ordinary viewer publication remains unauthorized.
-- Durable publication intents now carry a monotonically increasing per-family generation. All asynchronous publication and conflict-resolution completions clear only their captured generation; an older transport operation that ignores cancellation cannot clear a newer mutation. Existing legacy boolean dirty markers migrate additively to general generated intents, with no SwiftData schema or production CloudKit configuration change.
-- Share imports validate record/payload family identity, invitation eligibility, linked roles/profiles, settlements, identifier collisions, and reconciliation scope before mutation. Change tags advance only after successful import or an explicit validated conflict resolution.
-- Concurrent local/remote edits expose explicit **Keep Local** and **Use Cloud Copy** recovery. Failed recovery remains retryable and cannot mutate another family.
-- Linked memberships and unexpired invitations prevent incompatible profile changes. Expired invitations do not block deactivation, and authorized administrators can revoke active invitations. Viewer invitations require an active child profile.
-- Family-scoped recording, review, settlement, Store, rule, member, invitation, and sharing mutations enforce authorization in mutation logic. Caregivers and viewers retain their restricted behavior.
-- Deterministic transport coverage proves cancellation-ignoring publish A cannot clear newer mutation B. The full `FamilyCloudSharingTests` suite passed: 34/34.
-- The complete 167-test iPhone plan produced one valid final run with 166 passed, 0 failed, and 1 expected iPad-only skip. Repeated additional requests intermittently produced empty zero-test Xcode result bundles and are not counted.
-- The skipped regular-width member-editor regression passed separately on iPad Air 11-inch (M4) / iOS 27.0.
-- Before the final six sharing tests were added, the complete iPhone plan passed twice at each preceding final checkpoint. All 18 stateful UI tests use `XCUIApplication.isolatedForTesting()`; only the intentional launch-performance test uses a normal launch.
-- The app project builds successfully. Changed-file diagnostics are clean and `git diff HEAD --check` passes.
-- `JEMBTFamilyPointsTrackerApp` uses in-memory SwiftData with CloudKit disabled only when `UITEST_ISOLATED_STORE=1`; normal launches remain persistent with CloudKit `.automatic`.
-- The shared iOS scheme keeps the UI-test target serialized while unit tests remain parallelizable.
-- Issue Navigator still reports simulator UI-test audio-session/main-thread responsiveness warnings; no stale assertion or build failure remains.
-- The working tree intentionally remains uncommitted and contains mixed staged/unstaged changes; no commit or push was requested.
+- Cross-Apple-ID CloudKit sharing remains implemented through validated family-scoped snapshots, explicit invitation redemption authorization, strict family isolation, change-tag conflicts, explicit Keep Local/Use Cloud Copy resolution, protected mutation publication intents, per-family coalescing, durable retry, and stale-generation protection.
+- Role/profile compatibility, invitation revocation, protected mutation boundaries, Store checkout, Ledger review/editing, settlement, family administration, and rule management remain enforced in domain policy rather than only in UI visibility.
+- UI-test scenarios remain gated behind the isolated in-memory store; production CloudKit behavior is unchanged.
+- Existing iPhone/iPad member-editor idiom handling, top-level navigation tests, public-domain room soundscapes, soundtrack provenance, Watch sample isolation, shared test-plan files, and the pre-existing Watch/audio/test-plan modifications remain in the worktree.
+- Previously documented physical-device CloudKit, production schema, legacy dirty-marker migration, Watch simulator, and simulator audio-session verification gaps remain open below.
+
+## Verified
+
+- iPhone 18 Pro simulator (iOS 27.0): iOS target build passed.
+- iPad Pro 11-inch (M5) simulator (iOS 27.2): iOS target build passed.
+- `iOS Unit Fast`: 152 passed, 0 failed, 0 skipped.
+- The compact Family geometry failure was an obsolete absolute-coordinate assertion, not an artwork layout regression. The artwork is a non-layout-affecting background and the overview banner remains fixed at 52 points; iOS 27 reports the visible Children heading at 326.33 on the 874-point-tall iPhone 18 Pro screen, still within the upper half.
+- `testFamilyPageShowsPointsInMemberCardsWithoutStandaloneWeekSection` passed 3 consecutive focused runs on iPhone 18 Pro (iOS 27.0).
+- `iOS UI Functional` completed twice on iPhone 18 Pro (iOS 27.0); each Xcode run reported 19 passed, 0 failed, and 1 expected iPhone-only skip (`testRegularWidthAddMemberControlsRemainInteractiveAfterTextEntry`).
+- Focused iPad UI on iPad Pro 11-inch (M5) (iOS 27.2): compact/regular Family content regression and regular-width Add Member interaction both passed (2 passed, 0 failed, 0 skipped).
+- Current build log has no warnings and Issue Navigator has no current or stale entries.
+- SwiftUI artwork preview rendered on iPhone 18 Pro iOS 27.2 and iPad Pro 11-inch iOS 27.2 (dark appearance, increased contrast).
 
 ## Still required outside this task
 

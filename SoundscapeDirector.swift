@@ -4,6 +4,72 @@ import Observation
 import UIKit
 #endif
 
+nonisolated final class AudioSessionController: @unchecked Sendable {
+    typealias Activation = @Sendable (@escaping @Sendable (Bool) -> Void) -> Void
+
+    private let queue = DispatchQueue(label: "com.jembt.family-points.audio-session", qos: .userInitiated)
+    private let activation: Activation
+    private var isActive = false
+    private var isActivating = false
+    private var waiters: [CheckedContinuation<Bool, Never>] = []
+
+    init(activation: @escaping Activation) {
+        self.activation = activation
+    }
+
+    static func live() -> AudioSessionController {
+        AudioSessionController { completion in
+#if os(iOS) || os(tvOS) || os(watchOS)
+            let session = AVAudioSession.sharedInstance()
+            do {
+                try session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+                if #available(iOS 27.0, tvOS 27.0, watchOS 27.0, *) {
+                    session.activate(options: []) { activated, error in
+                        completion(activated && error == nil)
+                    }
+                } else {
+                    try session.setActive(true)
+                    completion(true)
+                }
+            } catch {
+                completion(false)
+            }
+#else
+            completion(true)
+#endif
+        }
+    }
+
+    func perform(_ operation: @escaping @Sendable () -> Void) {
+        queue.async(execute: operation)
+    }
+
+    func activateIfNeeded() async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                guard !isActive else {
+                    continuation.resume(returning: true)
+                    return
+                }
+
+                waiters.append(continuation)
+                guard !isActivating else { return }
+                isActivating = true
+                activation { [weak self] succeeded in
+                    guard let self else { return }
+                    queue.async {
+                        self.isActive = succeeded
+                        self.isActivating = false
+                        let currentWaiters = self.waiters
+                        self.waiters.removeAll()
+                        currentWaiters.forEach { $0.resume(returning: succeeded) }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class SoundscapeDirector {
@@ -46,6 +112,10 @@ final class SoundscapeDirector {
 
     var isEnabled: Bool {
         didSet {
+            guard !runtimeAudioDisabled else {
+                stopAllAudio()
+                return
+            }
             UserDefaults.standard.set(isEnabled, forKey: Self.soundPreferenceKey)
             if isEnabled {
                 activate(scene)
@@ -59,12 +129,19 @@ final class SoundscapeDirector {
     @ObservationIgnored private var musicPlayer: AVAudioPlayer?
     @ObservationIgnored private var effectPlayers: [AVAudioPlayer] = []
     @ObservationIgnored private var incidentalTask: Task<Void, Never>?
+    @ObservationIgnored private var playbackTask: Task<Void, Never>?
     @ObservationIgnored private var sceneOwners: [(id: UUID, scene: Scene)] = []
+    @ObservationIgnored private let audioSession: AudioSessionController
+    @ObservationIgnored private let runtimeAudioDisabled: Bool
 
     private static let soundPreferenceKey = "soundscapeEnabled"
 
-    init() {
-        if UserDefaults.standard.object(forKey: Self.soundPreferenceKey) == nil {
+    init(audioSession: AudioSessionController = .live(), disableAudio: Bool = false) {
+        self.audioSession = audioSession
+        runtimeAudioDisabled = disableAudio
+        if disableAudio {
+            isEnabled = false
+        } else if UserDefaults.standard.object(forKey: Self.soundPreferenceKey) == nil {
             isEnabled = true
         } else {
             isEnabled = UserDefaults.standard.bool(forKey: Self.soundPreferenceKey)
@@ -73,14 +150,22 @@ final class SoundscapeDirector {
 
     func activate(_ newScene: Scene) {
         scene = newScene
-        guard isEnabled else {
+        guard isEnabled, !runtimeAudioDisabled else {
             stopAllAudio()
             return
         }
 
         stopAllAudio()
-        configureAudioSession()
-        switch newScene {
+        guard newScene != .none else { return }
+        playbackTask = Task { [weak self] in
+            guard let self, await audioSession.activateIfNeeded(), !Task.isCancelled,
+                  isEnabled, scene == newScene else { return }
+            startPlayback(for: newScene)
+        }
+    }
+
+    private func startPlayback(for scene: Scene) {
+        switch scene {
         case .none:
             break
         case .storefront:
@@ -116,13 +201,21 @@ final class SoundscapeDirector {
     }
 
     func play(_ cue: Cue) {
-        guard isEnabled else { return }
-        configureAudioSession()
+        guard isEnabled, !runtimeAudioDisabled else { return }
+        Task { [weak self] in
+            guard let self, await audioSession.activateIfNeeded(), !Task.isCancelled, isEnabled else { return }
+            playAfterSessionActivation(cue)
+        }
+    }
+
+    private func playAfterSessionActivation(_ cue: Cue) {
         effectPlayers.removeAll { !$0.isPlaying }
         guard let player = try? AVAudioPlayer(data: audioData(for: cue)) else { return }
         player.volume = cue == .pointsLost ? 0.3 : 0.38
-        player.prepareToPlay()
-        player.play()
+        audioSession.perform {
+            player.prepareToPlay()
+            player.play()
+        }
         effectPlayers.append(player)
         provideHaptic(for: cue)
     }
@@ -148,8 +241,10 @@ final class SoundscapeDirector {
               let player = try? AVAudioPlayer(contentsOf: url) else { return }
         player.numberOfLoops = -1
         player.volume = scene == .penaltyEntry ? 0.07 : 0.09
-        player.prepareToPlay()
-        player.play()
+        audioSession.perform {
+            player.prepareToPlay()
+            player.play()
+        }
         musicPlayer = player
     }
 
@@ -165,20 +260,18 @@ final class SoundscapeDirector {
     }
 
     private func stopAllAudio() {
+        playbackTask?.cancel()
+        playbackTask = nil
         incidentalTask?.cancel()
         incidentalTask = nil
-        musicPlayer?.stop()
+        if let musicPlayer {
+            audioSession.perform { musicPlayer.stop() }
+        }
         musicPlayer = nil
-        effectPlayers.forEach { $0.stop() }
+        for player in effectPlayers {
+            audioSession.perform { player.stop() }
+        }
         effectPlayers.removeAll()
-    }
-
-    private func configureAudioSession() {
-#if os(iOS) || os(tvOS) || os(watchOS)
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
-        try? session.setActive(true)
-#endif
     }
 
     private func provideHaptic(for cue: Cue) {

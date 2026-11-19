@@ -2,13 +2,13 @@ import Foundation
 import Observation
 import WatchConnectivity
 
-struct WatchMemberSummary: Codable, Identifiable, Equatable {
+nonisolated struct WatchMemberSummary: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let points: Int
 }
 
-struct WatchActivitySummary: Codable, Identifiable, Equatable {
+nonisolated struct WatchActivitySummary: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let memberName: String
     let title: String
@@ -16,7 +16,7 @@ struct WatchActivitySummary: Codable, Identifiable, Equatable {
     let occurredAt: Date
 }
 
-struct WatchFamilySnapshot: Codable, Equatable {
+nonisolated struct WatchFamilySnapshot: Codable, Equatable, Sendable {
     let familyName: String
     let viewerName: String
     let viewerRole: String

@@ -40,6 +40,8 @@ struct RuleCatalogView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background { ClubhouseBackdrop(scene: .rules).ignoresSafeArea() }
             .navigationTitle("Rules")
         }
     }

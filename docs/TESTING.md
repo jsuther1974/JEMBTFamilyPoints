@@ -19,6 +19,19 @@
 
 The UI-test target is intentionally serialized in the shared iOS scheme. Unit tests may remain parallelized.
 
+## Shared iOS test plans
+
+The shared `JEMBT Family Points Tracker` scheme uses these Xcode-managed plans:
+
+| Plan | Enabled tests | Parallelization | Coverage | Use |
+| --- | ---: | --- | --- | --- |
+| `iOS Unit Fast` | 152 unit tests | Unit target parallelizable | Off | Fast local/CI logic validation |
+| `iOS UI Functional` | 19 UI tests; `testLaunchPerformance` excluded | UI target serialized | Off | Stateful functional UI validation |
+| `iOS Launch Performance` | `testLaunchPerformance` only | Serialized | Off | Normal persistent/CloudKit launch metric |
+| `iOS Complete Release` | 172 tests: 152 unit + 20 UI | Unit target parallelizable; UI target serialized | On | Default complete iOS release gate |
+
+Select the narrowest applicable plan in Xcode's test-plan picker. Keep `iOS Complete Release` as the shared scheme default and do not replace its release-gate role with a narrow plan.
+
 ### Watch tests
 
 The Watch unit target verifies snapshot encoding and useful glance data. Watch UI tests exercise the companion presentation using deterministic sample data where configured.
@@ -31,7 +44,11 @@ Stateful UI tests must create the app with:
 let app = XCUIApplication.isolatedForTesting()
 ```
 
-That factory sets `UITEST_ISOLATED_STORE=1`. The application then creates an in-memory SwiftData configuration with `cloudKitDatabase: .none` while normal launches remain persistent with CloudKit `.automatic`.
+That factory sets `UITEST_ISOLATED_STORE=1` and `UITEST_DISABLE_AUDIO=1`. The application then creates an in-memory SwiftData configuration with `cloudKitDatabase: .none` while normal launches remain persistent with CloudKit `.automatic`. The audio override suppresses simulator playback only for explicitly isolated launches; production audio preferences and audio unit coverage remain unchanged.
+
+Post-onboarding tests may request `UITEST_SCENARIO=signed-in-demo-parent` or `UITEST_SCENARIO=signed-in-empty-administrator` through `isolatedForTesting(scenario:)`. Both use clearly synthetic `example.invalid` identities and establish a fully linked family, membership, profile, and session in the fresh in-memory store. Scenario and audio values are ignored unless `UITEST_ISOLATED_STORE=1` is also present.
+
+Keep dedicated UI coverage for the real create-family, join-family, invitation, and Return-key flows; fixtures optimize only tests whose setup flow is not the assertion under test.
 
 Do not set the isolation variable in production schemes. Do not remove production CloudKit behavior to make tests deterministic.
 
