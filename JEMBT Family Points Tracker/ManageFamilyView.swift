@@ -3165,7 +3165,6 @@ private struct GenmojiAvatarButton: View {
                     onSelect(glyph.imageContent)
                 }
             )
-            .imagePlaygroundGenerationStyle(.emoji, in: [.emoji])
         }
     }
 }
