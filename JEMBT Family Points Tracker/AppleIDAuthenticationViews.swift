@@ -444,6 +444,7 @@ struct FamilyInvitationView: View {
                     for: family,
                     role: role,
                     familyMemberID: role == .child || role == .viewer ? selectedMemberID : nil,
+                    session: MutationSession(appleIDManager: appleIDManager),
                     modelContext: modelContext
                 )
             }

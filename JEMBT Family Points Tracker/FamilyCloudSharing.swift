@@ -1682,6 +1682,7 @@ enum FamilySharePublicationState {
             generation: max(1, defaults.integer(forKey: generationKeyPrefix + familyID.uuidString)),
             authorization: .general
         )
+        defaults.set(migrated.generation, forKey: generationKeyPrefix + familyID.uuidString)
         persist(migrated, familyID: familyID)
         return migrated
     }

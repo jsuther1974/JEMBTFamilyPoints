@@ -410,6 +410,39 @@ final class FamilyCloudSharingTests: XCTestCase {
         }
     }
 
+    func testLegacyBooleanDirtyMarkersMigrateToMonotonicGeneralPublicationIntents() throws {
+        let defaults = UserDefaults.standard
+        let freshFamilyID = UUID()
+        let existingGenerationFamilyID = UUID()
+        let prefixes = [
+            "FamilySharePublicationDirty.",
+            "FamilySharePublicationIntent.",
+            "FamilySharePublicationGeneration."
+        ]
+        defer {
+            for familyID in [freshFamilyID, existingGenerationFamilyID] {
+                prefixes.forEach { defaults.removeObject(forKey: $0 + familyID.uuidString) }
+            }
+        }
+
+        defaults.set(true, forKey: prefixes[0] + freshFamilyID.uuidString)
+        let freshIntent = try XCTUnwrap(FamilySharePublicationState.dirtyIntent(familyID: freshFamilyID))
+        XCTAssertEqual(freshIntent.generation, 1)
+        XCTAssertEqual(freshIntent.authorization, .general)
+        XCTAssertEqual(defaults.integer(forKey: prefixes[2] + freshFamilyID.uuidString), 1)
+        XCTAssertNotNil(defaults.data(forKey: prefixes[1] + freshFamilyID.uuidString))
+        XCTAssertEqual(FamilySharePublicationState.markDirty(familyID: freshFamilyID), 2)
+
+        defaults.set(true, forKey: prefixes[0] + existingGenerationFamilyID.uuidString)
+        defaults.set(7, forKey: prefixes[2] + existingGenerationFamilyID.uuidString)
+        let existingIntent = try XCTUnwrap(
+            FamilySharePublicationState.dirtyIntent(familyID: existingGenerationFamilyID)
+        )
+        XCTAssertEqual(existingIntent.generation, 7)
+        XCTAssertEqual(existingIntent.authorization, .general)
+        XCTAssertEqual(FamilySharePublicationState.markDirty(familyID: existingGenerationFamilyID), 8)
+    }
+
     func testDirtyPublicationStateIsRetainedOnFailureAndClearedOnlyAfterSuccess() async throws {
         let container = try makeContainer()
         let fixture = try makeFamilyFixture(in: container.mainContext, suffix: "Dirty")

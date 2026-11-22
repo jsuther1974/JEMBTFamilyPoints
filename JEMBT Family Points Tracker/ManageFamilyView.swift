@@ -130,8 +130,6 @@ struct ManageFamilyView: View {
                 }
             }
 
-            sharingErrorSection
-
             if appleIDManager.currentFamilyMember == nil {
                 Section {
                     Button("Restore my member profile") {
@@ -155,6 +153,8 @@ struct ManageFamilyView: View {
                 memberSection(title: "Parents", role: .parent)
                 memberSection(title: "Caregivers", role: .caregiver)
             }
+
+            sharingErrorSection
         }
         .scrollContentBackground(.hidden)
         .background {
@@ -532,6 +532,7 @@ struct ManageFamilyView: View {
                 sourceContactIdentifier: draft.sourceContactIdentifier,
                 avatarData: draft.avatarData,
                 role: draft.role,
+                session: MutationSession(appleIDManager: appleIDManager),
                 modelContext: modelContext
             )
         }
@@ -699,6 +700,7 @@ private struct InviteShareSheet: View {
                     for: family,
                     role: FamilyMembershipRole(profileRole: member.role),
                     familyMemberID: member.id,
+                    session: MutationSession(appleIDManager: appleIDManager),
                     modelContext: modelContext
                 )
             }

@@ -113,9 +113,15 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
         for family: AllowanceFamily,
         role: FamilyMembershipRole,
         familyMemberID: UUID? = nil,
+        session: MutationSession,
         modelContext: ModelContext
     ) throws -> FamilyInvitation {
         guard family.isActive else { throw InvitationError.familyUnavailable }
+        try ProtectedMutationPolicy.authorizeInvitationAdministration(
+            session: session,
+            targetFamily: family
+        )
+        let targetMember: FamilyMember?
         if let familyMemberID {
             let member = try modelContext.fetch(
                 FetchDescriptor<FamilyMember>(predicate: #Predicate { $0.id == familyMemberID })
@@ -126,8 +132,18 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
                   role.isCompatible(with: member.role) else {
                 throw InvitationError.invalidProfile
             }
+            targetMember = member
         } else if role == .child || role == .viewer {
             throw InvitationError.profileRequired
+        } else {
+            targetMember = nil
+        }
+        if let targetMember {
+            try ProtectedMutationPolicy.authorizeInvitationAdministration(
+                session: session,
+                targetFamily: family,
+                targetMember: targetMember
+            )
         }
 
         let existingCodes = Set(try modelContext.fetch(FetchDescriptor<FamilyInvitation>()).map {
@@ -160,9 +176,14 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
         sourceContactIdentifier: String? = nil,
         avatarData: Data? = nil,
         role: MemberRole,
+        session: MutationSession,
         modelContext: ModelContext,
         shouldCreateInvitation: Bool = true
     ) throws -> (member: FamilyMember, invitation: FamilyInvitation?) {
+        try ProtectedMutationPolicy.authorizeMemberAdministration(
+            session: session,
+            targetFamily: family
+        )
         try validateBirthDate(birthDate, for: role)
         try validateUniqueMember(
             familyID: family.id,
@@ -188,6 +209,7 @@ class AppleIDManager: NSObject, ASAuthorizationControllerDelegate, ASAuthorizati
                 for: family,
                 role: FamilyMembershipRole(profileRole: role),
                 familyMemberID: member.id,
+                session: session,
                 modelContext: modelContext
             )
             : nil

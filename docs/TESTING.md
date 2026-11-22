@@ -25,10 +25,10 @@ The shared `JEMBT Family Points Tracker` scheme uses these Xcode-managed plans:
 
 | Plan | Enabled tests | Parallelization | Coverage | Use |
 | --- | ---: | --- | --- | --- |
-| `iOS Unit Fast` | 152 unit tests | Unit target parallelizable | Off | Fast local/CI logic validation |
+| `iOS Unit Fast` | 158 unit tests | Unit target parallelizable | Off | Fast local/CI logic validation |
 | `iOS UI Functional` | 19 UI tests; `testLaunchPerformance` excluded | UI target serialized | Off | Stateful functional UI validation |
 | `iOS Launch Performance` | `testLaunchPerformance` only | Serialized | Off | Normal persistent/CloudKit launch metric |
-| `iOS Complete Release` | 172 tests: 152 unit + 20 UI | Unit target parallelizable; UI target serialized | On | Default complete iOS release gate |
+| `iOS Complete Release` | 178 tests: 158 unit + 20 UI | Unit target parallelizable; UI target serialized | On | Default complete iOS release gate |
 
 Select the narrowest applicable plan in Xcode's test-plan picker. Keep `iOS Complete Release` as the shared scheme default and do not replace its release-gate role with a narrow plan.
 

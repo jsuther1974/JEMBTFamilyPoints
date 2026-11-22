@@ -408,8 +408,8 @@ final class JEMBT_Family_Points_TrackerUITests: XCTestCase {
             XCTAssertTrue(childrenHeading.exists)
             XCTAssertLessThan(
                 childrenHeading.frame.minY,
-                windowFrame.midY,
-                "The compact summary should keep the first member section in the upper half of the usable screen."
+                220,
+                "The compact summary must leave room for member cards."
             )
         }
 

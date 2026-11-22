@@ -8,6 +8,7 @@ final class AppleIDManagerTests: XCTestCase {
         let family = AllowanceFamily(name: "Test Family", createdByAppleID: "test@local")
         context.insert(family)
         let manager = AppleIDManager()
+        let session = administrationSession(for: family)
 
         _ = try manager.addFamilyMember(
             family: family,
@@ -16,6 +17,7 @@ final class AppleIDManagerTests: XCTestCase {
             birthDate: nil,
             sourceContactIdentifier: "synthetic-contact-1",
             role: .parent,
+            session: session,
             modelContext: context,
             shouldCreateInvitation: false
         )
@@ -28,6 +30,7 @@ final class AppleIDManagerTests: XCTestCase {
                 birthDate: nil,
                 sourceContactIdentifier: "synthetic-contact-1",
                 role: .parent,
+                session: session,
                 modelContext: context,
                 shouldCreateInvitation: false
             )
@@ -42,6 +45,7 @@ final class AppleIDManagerTests: XCTestCase {
         let family = AllowanceFamily(name: "Test Family", createdByAppleID: "test@local")
         context.insert(family)
         let manager = AppleIDManager()
+        let session = administrationSession(for: family)
 
         _ = try manager.addFamilyMember(
             family: family,
@@ -49,6 +53,7 @@ final class AppleIDManagerTests: XCTestCase {
             emailAddress: "member-one@example.invalid",
             birthDate: nil,
             role: .parent,
+            session: session,
             modelContext: context,
             shouldCreateInvitation: false
         )
@@ -60,6 +65,7 @@ final class AppleIDManagerTests: XCTestCase {
                 emailAddress: "MEMBER-ONE@EXAMPLE.INVALID",
                 birthDate: nil,
                 role: .parent,
+                session: session,
                 modelContext: context,
                 shouldCreateInvitation: false
             )
@@ -72,6 +78,7 @@ final class AppleIDManagerTests: XCTestCase {
         let family = AllowanceFamily(name: "Test Family", createdByAppleID: "test@local")
         context.insert(family)
         let manager = AppleIDManager()
+        let session = administrationSession(for: family)
         let originalAvatar = Data([0x01, 0x02, 0x03])
 
         let result = try manager.addFamilyMember(
@@ -81,6 +88,7 @@ final class AppleIDManagerTests: XCTestCase {
             birthDate: nil,
             avatarData: originalAvatar,
             role: .parent,
+            session: session,
             modelContext: context,
             shouldCreateInvitation: false
         )
@@ -108,6 +116,123 @@ final class AppleIDManagerTests: XCTestCase {
             modelContext: context
         )
         XCTAssertNil(result.member.avatarData)
+    }
+
+    func testAddFamilyMemberAllowsPersistedAdministratorAndOwnerSessions() throws {
+        for role in [FamilyMembershipRole.familyAdmin, .owner] {
+            let context = try makeContext()
+            let family = AllowanceFamily(name: "Authorized \(role.rawValue)", createdByAppleID: "owner")
+            context.insert(family)
+            let persisted = try persistedSession(role: role, family: family, context: context)
+
+            let result = try AppleIDManager().addFamilyMember(
+                family: persisted.family,
+                name: "New Parent",
+                emailAddress: "new-parent-\(role.rawValue)@example.invalid",
+                birthDate: nil,
+                role: .parent,
+                session: persisted.session,
+                modelContext: context
+            )
+
+            XCTAssertEqual(result.member.familyID, persisted.family.id)
+            XCTAssertEqual(result.invitation?.familyMemberID, result.member.id)
+            XCTAssertEqual(try context.fetch(FetchDescriptor<FamilyMember>()).count, 2)
+            XCTAssertEqual(try context.fetch(FetchDescriptor<FamilyInvitation>()).count, 1)
+        }
+    }
+
+    func testAddFamilyMemberRejectsChildCaregiverAndViewerWithoutInsertingMemberOrInvitation() throws {
+        for role in [FamilyMembershipRole.child, .caregiver, .viewer] {
+            let context = try makeContext()
+            let family = AllowanceFamily(name: "Unauthorized \(role.rawValue)", createdByAppleID: "owner")
+            context.insert(family)
+            let persisted = try persistedSession(role: role, family: family, context: context)
+
+            try assertAddFamilyMemberRejected(
+                family: persisted.family,
+                session: persisted.session,
+                expectedError: .notAuthorized,
+                context: context
+            )
+        }
+    }
+
+    func testAddFamilyMemberRejectsStaleAppleIDAndMismatchedOrInactiveProfilesWithoutMutation() throws {
+        do {
+            let context = try makeContext()
+            let family = AllowanceFamily(name: "Stale", createdByAppleID: "owner")
+            context.insert(family)
+            let persisted = try persistedSession(role: .familyAdmin, family: family, context: context)
+            let staleSession = MutationSession(
+                appleID: "stale-apple-id",
+                family: persisted.family,
+                membership: persisted.membership,
+                member: persisted.member
+            )
+            try assertAddFamilyMemberRejected(
+                family: persisted.family,
+                session: staleSession,
+                expectedError: .appleIDMismatch,
+                context: context
+            )
+        }
+
+        do {
+            let context = try makeContext()
+            let family = AllowanceFamily(name: "Mismatch", createdByAppleID: "owner")
+            context.insert(family)
+            let persisted = try persistedSession(role: .familyAdmin, family: family, context: context)
+            let otherParent = FamilyMember(familyID: family.id, name: "Other Parent", role: .parent)
+            context.insert(otherParent)
+            try context.save()
+            let mismatchedSession = MutationSession(
+                appleID: persisted.appleID,
+                family: persisted.family,
+                membership: persisted.membership,
+                member: otherParent
+            )
+            try assertAddFamilyMemberRejected(
+                family: persisted.family,
+                session: mismatchedSession,
+                expectedError: .profileMismatch,
+                context: context
+            )
+        }
+
+        do {
+            let context = try makeContext()
+            let family = AllowanceFamily(name: "Inactive", createdByAppleID: "owner")
+            context.insert(family)
+            let persisted = try persistedSession(
+                role: .familyAdmin,
+                family: family,
+                context: context,
+                isActive: false
+            )
+            try assertAddFamilyMemberRejected(
+                family: persisted.family,
+                session: persisted.session,
+                expectedError: .inactiveProfile,
+                context: context
+            )
+        }
+    }
+
+    func testAddFamilyMemberRejectsForeignFamilySessionWithoutInsertingMemberOrInvitation() throws {
+        let context = try makeContext()
+        let localFamily = AllowanceFamily(name: "Local", createdByAppleID: "local-owner")
+        let foreignFamily = AllowanceFamily(name: "Foreign", createdByAppleID: "foreign-owner")
+        context.insert(localFamily)
+        context.insert(foreignFamily)
+        let foreign = try persistedSession(role: .owner, family: foreignFamily, context: context)
+
+        try assertAddFamilyMemberRejected(
+            family: localFamily,
+            session: foreign.session,
+            expectedError: .familyMismatch,
+            context: context
+        )
     }
 
     func testEnsureProfileCreatesOnlyForUnlinkedValidMembership() throws {
@@ -279,6 +404,7 @@ final class AppleIDManagerTests: XCTestCase {
         context.insert(inactiveChild)
         try context.save()
         let manager = AppleIDManager()
+        let session = administrationSession(for: first)
 
         for (memberID, role) in [
             (foreignChild.id, FamilyMembershipRole.child),
@@ -289,15 +415,109 @@ final class AppleIDManagerTests: XCTestCase {
                 for: first,
                 role: role,
                 familyMemberID: memberID,
+                session: session,
                 modelContext: context
             ))
         }
         XCTAssertThrowsError(try manager.createInvitation(
             for: first,
             role: .child,
+            session: session,
             modelContext: context
         ))
         XCTAssertTrue(try context.fetch(FetchDescriptor<FamilyInvitation>()).isEmpty)
+    }
+
+    func testInvitationMutationBoundaryEnforcesRoleSessionAndFamilyMatrix() throws {
+        let context = try makeContext()
+        let family = AllowanceFamily(name: "Local", createdByAppleID: "admin")
+        let child = FamilyMember(
+            familyID: family.id, name: "Local child",
+            birthDate: Date(timeIntervalSince1970: 0), role: .child
+        )
+        let foreignFamily = AllowanceFamily(name: "Foreign", createdByAppleID: "foreign")
+        let foreignChild = FamilyMember(
+            familyID: foreignFamily.id, name: "Foreign child",
+            birthDate: Date(timeIntervalSince1970: 0), role: .child
+        )
+        [family, foreignFamily].forEach(context.insert)
+        [child, foreignChild].forEach(context.insert)
+        try context.save()
+        let manager = AppleIDManager()
+
+        for role in [FamilyMembershipRole.parent, .caregiver, .child, .viewer] {
+            let session = mutationSession(role: role, family: family)
+            XCTAssertThrowsError(try manager.createInvitation(
+                for: family, role: .child, familyMemberID: child.id,
+                session: session, modelContext: context
+            ), "Expected creation denial for \(role)") {
+                XCTAssertEqual($0 as? ProtectedMutationError, .notAuthorized)
+            }
+            let pending = FamilyInvitation(
+                familyID: family.id, familyMemberID: child.id,
+                code: "R\(role.rawValue)", role: .child
+            )
+            context.insert(pending)
+            try context.save()
+            XCTAssertThrowsError(try manager.revokeInvitation(
+                pending, in: family, session: session, modelContext: context
+            ), "Expected revocation denial for \(role)") {
+                XCTAssertEqual($0 as? ProtectedMutationError, .notAuthorized)
+            }
+            XCTAssertEqual(pending.status, .pending)
+        }
+
+        for role in [FamilyMembershipRole.familyAdmin, .owner] {
+            let session = mutationSession(role: role, family: family)
+            let created = try manager.createInvitation(
+                for: family, role: .child, familyMemberID: child.id,
+                session: session, modelContext: context
+            )
+            try manager.revokeInvitation(created, in: family, session: session, modelContext: context)
+            XCTAssertEqual(created.status, .revoked)
+        }
+
+        let adminSession = mutationSession(role: .familyAdmin, family: family)
+        let invitationCount = try context.fetch(FetchDescriptor<FamilyInvitation>()).count
+        XCTAssertThrowsError(try manager.createInvitation(
+            for: family, role: .child, familyMemberID: foreignChild.id,
+            session: adminSession, modelContext: context
+        ))
+        XCTAssertEqual(try context.fetch(FetchDescriptor<FamilyInvitation>()).count, invitationCount)
+
+        let foreignInvitation = FamilyInvitation(
+            familyID: foreignFamily.id, familyMemberID: foreignChild.id,
+            code: "FOREIGN", role: .child
+        )
+        context.insert(foreignInvitation)
+        try context.save()
+        XCTAssertThrowsError(try manager.revokeInvitation(
+            foreignInvitation, in: family, session: adminSession, modelContext: context
+        )) { XCTAssertEqual($0 as? ProtectedMutationError, .foreignRecipient) }
+        XCTAssertEqual(foreignInvitation.status, .pending)
+
+        let staleSession = MutationSession(
+            appleID: "stale", family: family,
+            membership: adminSession.membership, member: adminSession.member
+        )
+        XCTAssertThrowsError(try manager.createInvitation(
+            for: family, role: .parent, session: staleSession, modelContext: context
+        )) { XCTAssertEqual($0 as? ProtectedMutationError, .appleIDMismatch) }
+
+        let inactiveSession = mutationSession(role: .familyAdmin, family: family)
+        inactiveSession.member?.isActive = false
+        XCTAssertThrowsError(try manager.createInvitation(
+            for: family, role: .parent, session: inactiveSession, modelContext: context
+        )) { XCTAssertEqual($0 as? ProtectedMutationError, .inactiveProfile) }
+
+        let mismatchedMember = FamilyMember(familyID: family.id, name: "Mismatched", role: .parent)
+        let mismatchedSession = MutationSession(
+            appleID: adminSession.appleID, family: family,
+            membership: adminSession.membership, member: mismatchedMember
+        )
+        XCTAssertThrowsError(try manager.createInvitation(
+            for: family, role: .parent, session: mismatchedSession, modelContext: context
+        )) { XCTAssertEqual($0 as? ProtectedMutationError, .profileMismatch) }
     }
 
     func testAcceptInvitationCreatesCompleteAdultSessionAndMatchesCodeCaseInsensitively() throws {
@@ -617,19 +837,141 @@ final class AppleIDManagerTests: XCTestCase {
         context.insert(inactiveChild)
         try context.save()
         let manager = AppleIDManager()
+        let session = administrationSession(for: family)
 
-        XCTAssertThrowsError(try manager.createInvitation(for: family, role: .viewer, modelContext: context))
         XCTAssertThrowsError(try manager.createInvitation(
-            for: family, role: .viewer, familyMemberID: parent.id, modelContext: context
+            for: family, role: .viewer, session: session, modelContext: context
         ))
         XCTAssertThrowsError(try manager.createInvitation(
-            for: family, role: .viewer, familyMemberID: inactiveChild.id, modelContext: context
+            for: family, role: .viewer, familyMemberID: parent.id,
+            session: session, modelContext: context
+        ))
+        XCTAssertThrowsError(try manager.createInvitation(
+            for: family, role: .viewer, familyMemberID: inactiveChild.id,
+            session: session, modelContext: context
         ))
         let invitation = try manager.createInvitation(
-            for: family, role: .viewer, familyMemberID: child.id, modelContext: context
+            for: family, role: .viewer, familyMemberID: child.id,
+            session: session, modelContext: context
         )
         XCTAssertEqual(invitation.familyMemberID, child.id)
         XCTAssertEqual(invitation.role, .viewer)
+    }
+
+    private func administrationSession(for family: AllowanceFamily) -> MutationSession {
+        mutationSession(role: .familyAdmin, family: family)
+    }
+
+    private func mutationSession(
+        role: FamilyMembershipRole,
+        family: AllowanceFamily
+    ) -> MutationSession {
+        let appleID = "\(role.rawValue)-\(family.id.uuidString)"
+        let profileRole: MemberRole = switch role {
+        case .familyAdmin, .owner, .parent: .parent
+        case .caregiver: .caregiver
+        case .child, .viewer: .child
+        }
+        let member = FamilyMember(
+            familyID: family.id,
+            name: role.title,
+            birthDate: profileRole == .child ? Date(timeIntervalSince1970: 0) : nil,
+            role: profileRole
+        )
+        let membership = FamilyMembership(
+            familyID: family.id,
+            familyMemberID: member.id,
+            appleID: appleID,
+            role: role
+        )
+        return MutationSession(
+            appleID: appleID,
+            family: family,
+            membership: membership,
+            member: member
+        )
+    }
+
+    private func persistedSession(
+        role: FamilyMembershipRole,
+        family: AllowanceFamily,
+        context: ModelContext,
+        isActive: Bool = true
+    ) throws -> (
+        appleID: String,
+        family: AllowanceFamily,
+        membership: FamilyMembership,
+        member: FamilyMember,
+        session: MutationSession
+    ) {
+        let appleID = "\(role.rawValue)-\(family.id.uuidString)"
+        let profileRole: MemberRole = switch role {
+        case .familyAdmin, .owner, .parent: .parent
+        case .caregiver: .caregiver
+        case .child, .viewer: .child
+        }
+        let member = FamilyMember(
+            familyID: family.id,
+            name: "Persisted \(role.title)",
+            birthDate: profileRole == .child ? Date(timeIntervalSince1970: 0) : nil,
+            role: profileRole,
+            isActive: isActive
+        )
+        let membership = FamilyMembership(
+            familyID: family.id,
+            familyMemberID: member.id,
+            appleID: appleID,
+            role: role
+        )
+        context.insert(member)
+        context.insert(membership)
+        try context.save()
+
+        let persistedFamily = try XCTUnwrap(
+            context.fetch(FetchDescriptor<AllowanceFamily>()).first { $0.id == family.id }
+        )
+        let persistedMember = try XCTUnwrap(
+            context.fetch(FetchDescriptor<FamilyMember>()).first { $0.id == member.id }
+        )
+        let persistedMembership = try XCTUnwrap(
+            context.fetch(FetchDescriptor<FamilyMembership>()).first { $0.id == membership.id }
+        )
+        return (
+            appleID,
+            persistedFamily,
+            persistedMembership,
+            persistedMember,
+            MutationSession(
+                appleID: appleID,
+                family: persistedFamily,
+                membership: persistedMembership,
+                member: persistedMember
+            )
+        )
+    }
+
+    private func assertAddFamilyMemberRejected(
+        family: AllowanceFamily,
+        session: MutationSession,
+        expectedError: ProtectedMutationError,
+        context: ModelContext
+    ) throws {
+        let memberCount = try context.fetch(FetchDescriptor<FamilyMember>()).count
+        let invitationCount = try context.fetch(FetchDescriptor<FamilyInvitation>()).count
+
+        XCTAssertThrowsError(try AppleIDManager().addFamilyMember(
+            family: family,
+            name: "Unauthorized Addition",
+            emailAddress: "unauthorized@example.invalid",
+            birthDate: nil,
+            role: .parent,
+            session: session,
+            modelContext: context
+        )) {
+            XCTAssertEqual($0 as? ProtectedMutationError, expectedError)
+        }
+        XCTAssertEqual(try context.fetch(FetchDescriptor<FamilyMember>()).count, memberCount)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<FamilyInvitation>()).count, invitationCount)
     }
 
     private func makeContext() throws -> ModelContext {
