@@ -2,41 +2,34 @@
 
 ## Current objective
 
-Complete release-readiness hardening for compact Family layout, invitation authorization, CloudKit publication migration, signed capabilities, and Watch coverage.
+Confirm stability of `Family_Points_Watch_App_Watch_AppUITests.testSyncedDashboardShowsBalancesAndReviewCount()` on the Parent 1 Watch matrix lane.
 
-## Implementation state
+## Source/config verification (current)
 
-- `AppleIDManager.createInvitation` and `addFamilyMember` now require a complete `MutationSession` and enforce family-administration authorization at the mutation boundary.
-- Invitation creation rejects child, caregiver, viewer, stale, mismatched, inactive-profile, and foreign-family sessions before mutation; administrator/owner flows remain supported.
-- Invitation redemption remains a separate, narrowly scoped invitee path so authorized child/viewer redemption is preserved.
-- Legacy boolean CloudKit dirty markers now persist the migrated monotonic generation before storing the generation-aware publication intent.
-- Family-sharing recovery errors render after member sections so transient Cloud state cannot displace the primary Family activity surface.
-- The compact Family UI test again enforces the original absolute `Children.frame.minY < 220` requirement.
-- Debug signing now includes Sign in with Apple. Production SwiftData/CloudKit behavior and test-only in-memory isolation are unchanged.
+- `Tools/run_household_device_matrix.sh --dry-run` maps Parent 1 Watch to `Apple Watch Series 12 (46mm)` (`F1A18732-E3B0-4BD4-9530-007845533C93`) on watchOS 27.2.
+- `JEMBT Family Points Tracker.xcodeproj/xcshareddata/xcschemes/Family Points Watch App Watch App.xcscheme` has both watch test bundles serialized (`parallelizable="NO"`).
+- `iOS UI Functional.xctestplan` remains serialized for iOS UI (`"parallelizable" : false`).
 
-## Verified
+## Verification runs (current)
 
-- iPhone 18 Pro simulator (iOS 27.0): `iOS Unit Fast` passed 158/158.
-- iPhone 18 Pro simulator (iOS 27.0): compact Family regression passed three consecutive focused runs.
-- iPhone 18 Pro simulator (iOS 27.0): `iOS Complete Release` passed 177, failed 0, with the expected iPad-only test skipped (178 total).
-- iPad Pro 11-inch (M5) simulator (iOS 27.2): compact Family and regular-width Add Member regressions passed 2/2.
-- Apple Watch SE 3 (40mm) simulator (watchOS 27.2): Watch build passed; Watch unit/UI tests passed 4/4 using the deterministic sample environment.
-- Generic iOS device Debug build passed. Its processed entitlements contain Sign in with Apple, CloudKit, push, and the expected iCloud container.
-- Signed Release archive passed. Its final signed entitlements contain Sign in with Apple, declared age range, CloudKit, push, and the expected iCloud container; the archive emitted only the expected no-AppIntents-dependency metadata warning.
-- Invitation role/family/session matrix and legacy dirty-marker migration tests pass as part of the unit and complete plans.
-- `WatchSyncBridge.swift` compiles in the main iOS application build.
+Destination: Parent 1 Watch (`Apple Watch Series 12 (46mm)`, watchOS 27.2, UDID `F1A18732-E3B0-4BD4-9530-007845533C93`).
 
-## Still required before production release
+1. Focused reruns (same test, repeated 3x):
+   - `xcodebuild test -scheme "Family Points Watch App Watch App" -destination "id=F1A18732-E3B0-4BD4-9530-007845533C93" -only-testing:"Family Points Watch App Watch AppUITests/Family_Points_Watch_App_Watch_AppUITests/testSyncedDashboardShowsBalancesAndReviewCount"`
+   - Outcome: 3/3 runs passed; each run executed 1 test, 0 failed, 0 skipped.
 
-1. On two signed physical devices with different Apple IDs, verify share creation/delivery, `userDidAcceptCloudKitShareWith`, every invitation role (especially Viewer), shared-database visibility, offline edits, foreground retry, both conflict choices, participant removal, re-invitation, and strict family isolation.
-2. Verify production CloudKit `SharedFamily` schema/index deployment, permissions, push propagation, and realistic snapshot asset sizes.
-3. Exercise an upgraded existing installation to verify the tested legacy boolean dirty-marker migration against real persisted `UserDefaults` state.
-4. Verify paired iPhone/Watch delivery and cached offline display on physical hardware; simulator Watch build and deterministic unit/UI coverage are complete.
-5. Run the final archive/export and App Store submission checks with the intended distribution profile and production CloudKit environment.
+2. Full watch scheme (same destination, 1x):
+   - `xcodebuild test -scheme "Family Points Watch App Watch App" -destination "id=F1A18732-E3B0-4BD4-9530-007845533C93"`
+   - Outcome: pass; watch unit tests 2/2 passed and watch UI tests 2/2 passed (total 4 passed, 0 failed, 0 skipped, 0 expected failures).
 
-## Guardrails
+## Diagnosis summary
 
-- Do not change production CloudKit configuration to fix UI tests.
-- Do not re-enable parallel UI tests while they depend on shared simulator resources or seeded role flows.
-- Do not weaken the Ledger content assertion; keep disclosure expansion and dynamic re-query behavior deterministic.
-- Do not commit or push unless explicitly requested.
+- No recurrence of the prior Parent 1 lane failure in current runs.
+- Current logs show startup latency during automation session setup, but no `DTServiceHubClient ... IS NOT still alive`, launch-service shutdown, or watch-app-not-found failures.
+- Stability is currently consistent with keeping watch test bundles serialized.
+
+## Warnings/risks
+
+- Non-fatal Xcode log noise observed: `IDELaunchParametersSnapshot: debugger version lookup failed for path '<nil>': noURL` and watch app `[API] cannot add handler to 0 from 0 - dropping`.
+- No skips expected on these watch runs, and none occurred.
+- No stale CLI-reported failures remain in the just-produced test output.

@@ -113,6 +113,37 @@ Include every model required by relationships or code paths under test. Avoid re
 8. Review Issue Navigator/build logs for warnings and stale failures.
 9. Run `git diff --check` and inspect repository status.
 
+## Household device matrix runner
+
+Use `Tools/run_household_device_matrix.sh` when you need a repeatable cross-device pass that approximates a real family setup across iPhone, iPad, Watch, and local Mac Catalyst build coverage.
+
+- Dry-run (print mapped destinations and commands): `Tools/run_household_device_matrix.sh --dry-run`
+- Execute matrix commands: `Tools/run_household_device_matrix.sh --run`
+
+The script chooses the nearest available simulator when an exact model string is unavailable:
+
+- Parent 1: iPhone 18 Pro Max → `iPhone 18 Pro Max` (fallback `iPhone 17 Pro Max`), iPad Pro M5 → `iPad Pro 13-inch (M5)` (fallback `iPad Pro 11-inch (M5)`), Watch 12 46mm → `Apple Watch Series 12 (46mm)` (fallback `Apple Watch Series 11 (46mm)`).
+- Parent 2: iPhone 16 Pro → `iPhone 16 Pro` (fallback `iPhone 15 Pro`), iPad Pro M4 → `iPad Pro 13-inch (M4)` (fallback `iPad Pro 11-inch (M4)`), no Watch destination by design.
+- Child: iPad Pro 11-inch M1 → `iPad Pro (11-inch) (3rd generation)` (fallback `iPad Pro (11-inch) (4th generation)`), Watch SE 2 40mm → `Apple Watch SE (40mm) (2nd generation)` (fallback `Apple Watch SE 3 (40mm)`).
+
+Runtime lanes remain explicit in reporting: one iOS lane (phone/tablet matrix by resolved simulator runtime) and one watchOS lane (Watch scheme on direct Watch destinations).
+
+The script also includes one local build-only Catalyst lane on the current machine:
+
+- `xcodebuild build -scheme "JEMBT Family Points Tracker" -destination "platform=macOS,variant=Mac Catalyst"`
+
+Physical-Mac household coverage remains manual and should be reported separately:
+
+- Parent 1 manual Macs: Mac Studio M4 Max and MacBook Pro M4.
+- Parent 2 manual Mac: MacBook Air M1 (2020).
+
+Keep Catalyst verification as:
+
+- PR smoke: build-only Catalyst validation when desktop-affecting code changes.
+- Pre-release manual sanity: launch/navigation pass on each household Mac before release candidates.
+
+This runner keeps destination control in a script instead of an `.xctestplan` because Xcode test plans configure test selection/options, while destination matrices span two schemes (`JEMBT Family Points Tracker` and `Family Points Watch App Watch App`) and idiom-specific simulator choices.
+
 ## Result reporting
 
 Always state:

@@ -18,6 +18,40 @@ private struct PointChangeNotice: Identifiable {
     var color: Color { points > 0 ? .green : .orange }
 }
 
+private struct LaunchSplashConfiguration {
+    enum Mode {
+        case automatic
+        case hold
+        case skip
+    }
+
+    let mode: Mode
+    let visibleDuration: Duration
+    let dismissalDuration: Double
+
+    var startsVisible: Bool { mode != .skip }
+
+    init(environment: [String: String] = ProcessInfo.processInfo.environment) {
+        switch environment["UITEST_SPLASH_MODE"]?.lowercased() {
+        case "hold":
+            mode = .hold
+        case "skip":
+            mode = .skip
+        default:
+            mode = .automatic
+        }
+
+        if let overrideSeconds = environment["UITEST_SPLASH_SECONDS"],
+           let parsedSeconds = Double(overrideSeconds),
+           parsedSeconds >= 0 {
+            visibleDuration = .seconds(parsedSeconds)
+        } else {
+            visibleDuration = .seconds(0.68)
+        }
+        dismissalDuration = 0.24
+    }
+}
+
 struct ContentView: View {
     @Environment(AppleIDManager.self) private var appleIDManager
     @Environment(SoundscapeDirector.self) private var soundscape
@@ -27,6 +61,9 @@ struct ContentView: View {
     @State private var observedPointTotal: Int?
     @State private var pointChangeNotice: PointChangeNotice?
     @State private var soundscapeOwner = UUID()
+    private let launchSplashConfiguration = LaunchSplashConfiguration()
+    @State private var showingLaunchSplash = LaunchSplashConfiguration().startsVisible
+    @State private var splashDismissTask: Task<Void, Never>?
     
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -107,11 +144,30 @@ struct ContentView: View {
                 .accessibilityIdentifier("pointChangeNotice")
             }
         }
+        .overlay {
+            if showingLaunchSplash {
+                LaunchSplashOverlayView()
+                    .transition(.opacity.combined(with: .scale(scale: 1.01)))
+                    .accessibilityIdentifier("launchSplashRoot")
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Launch splash state")
+                .accessibilityValue(showingLaunchSplash ? "Visible" : "Dismissed")
+                .accessibilityIdentifier("launchSplashState")
+        }
         .onAppear {
             observedPointTotal = currentUserPointTotal
             soundscape.enter(soundscapeScene, owner: soundscapeOwner)
+            scheduleSplashDismissalIfNeeded()
         }
-        .onDisappear { soundscape.leave(owner: soundscapeOwner) }
+        .onDisappear {
+            splashDismissTask?.cancel()
+            soundscape.leave(owner: soundscapeOwner)
+        }
         .onChange(of: selectedTab) {
             soundscape.enter(soundscapeScene, owner: soundscapeOwner)
         }
@@ -159,6 +215,58 @@ struct ContentView: View {
     private func signOut() {
         soundscape.stop()
         appleIDManager.signOut()
+    }
+
+    private func scheduleSplashDismissalIfNeeded() {
+        guard showingLaunchSplash, splashDismissTask == nil else { return }
+        guard launchSplashConfiguration.mode == .automatic else { return }
+        splashDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: launchSplashConfiguration.visibleDuration)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: launchSplashConfiguration.dismissalDuration)) {
+                showingLaunchSplash = false
+            }
+            splashDismissTask = nil
+        }
+    }
+}
+
+private struct LaunchSplashOverlayView: View {
+    private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+    @State private var contentVisible = false
+
+    var body: some View {
+        ZStack {
+            ClubhouseBackdrop(scene: .family, intensity: .standard)
+                .ignoresSafeArea()
+
+            VStack(spacing: isPad ? 22 : 16) {
+                ZStack {
+                    FramedFamilyPortrait()
+                        .accessibilityHidden(true)
+                }
+                .frame(width: isPad ? 300 : 220, height: isPad ? 250 : 184)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Launch portrait frame")
+                .accessibilityIdentifier("launchSplashPortraitFrame")
+
+                Label("Loading Family Points", systemImage: "sparkles")
+                    .font(isPad ? .title2.weight(.semibold) : .headline)
+                    .padding(.horizontal, isPad ? 20 : 16)
+                    .padding(.vertical, isPad ? 12 : 10)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .accessibilityIdentifier("launchSplashTitle")
+            }
+            .padding(.horizontal, 24)
+            .opacity(contentVisible ? 1 : 0.9)
+            .scaleEffect(contentVisible ? 1 : 0.985)
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.2)) {
+                contentVisible = true
+            }
+        }
     }
 }
 

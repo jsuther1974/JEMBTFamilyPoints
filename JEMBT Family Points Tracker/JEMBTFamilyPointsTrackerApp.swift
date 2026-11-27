@@ -105,6 +105,8 @@ struct JEMBTFamilyPointsTrackerApp: App {
             let manager = AppleIDManager()
             _appleIDManager = State(initialValue: manager)
             _soundscape = State(initialValue: SoundscapeDirector(disableAudio: launchConfiguration.disablesAudio))
+            AppRuntimeDependencies.appleIDManager = manager
+            AppRuntimeDependencies.modelContainer = modelContainer
             FamilySharingCoordinator.shared.configure(modelContainer: modelContainer)
             try SeedData.seedIfNeeded(in: modelContainer.mainContext)
             if let scenario = launchConfiguration.scenario {
